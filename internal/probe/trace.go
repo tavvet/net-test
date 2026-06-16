@@ -38,10 +38,11 @@ type Hop struct {
 
 // TraceSnapshot is the full per-hop table as of the latest probing cycle.
 type TraceSnapshot struct {
-	Target string
-	IP     string
-	Hops   []Hop
-	Err    string
+	Target    string
+	IP        string
+	Hops      []Hop
+	Diagnosis Diagnosis // per-segment summary; filled by BuildDiagnosis
+	Err       string
 }
 
 // Tracer repeatedly probes every hop on the path (mtr style) and emits a
@@ -148,7 +149,13 @@ func (tr *Tracer) Run(ctx context.Context, out chan<- TraceSnapshot) {
 			hops = append(hops, h)
 		}
 		markAnomalies(hops)
-		if !emit(ctx, out, TraceSnapshot{Target: tr.target, IP: tr.ip.String(), Hops: hops}) {
+		snap := TraceSnapshot{
+			Target:    tr.target,
+			IP:        tr.ip.String(),
+			Hops:      hops,
+			Diagnosis: BuildDiagnosis(hops),
+		}
+		if !emit(ctx, out, snap) {
 			return
 		}
 

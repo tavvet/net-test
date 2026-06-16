@@ -45,11 +45,24 @@ func sampleModel() model {
 
 func TestViewRendersAllTabs(t *testing.T) {
 	m := sampleModel()
-	for _, tb := range []tab{tabPing, tabTrace, tabSpeed} {
+	for _, tb := range []tab{tabPing, tabTrace, tabDiagnosis, tabSpeed} {
 		m.tab = tb
 		out := m.View()
 		if strings.TrimSpace(out) == "" {
 			t.Fatalf("tab %d rendered empty", tb)
+		}
+	}
+}
+
+func TestViewDiagnosisContent(t *testing.T) {
+	m := sampleModel()
+	// Attach a diagnosis to the sample so the tab has something to render.
+	m.trace.Diagnosis = probe.BuildDiagnosis(m.trace.Hops)
+	m.tab = tabDiagnosis
+	out := m.View()
+	for _, want := range []string{"Маршрут до", "Локальная сеть", "CLOUDFLARENET", "⚠", "проблема в зоне"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("diagnosis view missing %q", want)
 		}
 	}
 }
@@ -104,7 +117,8 @@ func TestSnapshot(t *testing.T) {
 		t.Skip("set NETTEST_SNAPSHOT=1 to print frames")
 	}
 	m := sampleModel()
-	for _, tb := range []tab{tabPing, tabTrace, tabSpeed} {
+	m.trace.Diagnosis = probe.BuildDiagnosis(m.trace.Hops)
+	for _, tb := range []tab{tabPing, tabTrace, tabDiagnosis, tabSpeed} {
 		m.tab = tb
 		fmt.Printf("\n========== TAB %d ==========\n%s\n", tb, m.View())
 	}

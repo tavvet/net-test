@@ -22,6 +22,8 @@ func (m model) render() string {
 		body = m.viewPing()
 	case tabTrace:
 		body = m.viewTrace()
+	case tabDiagnosis:
+		body = m.viewDiagnosis()
 	case tabSpeed:
 		body = m.viewSpeed()
 	}
@@ -58,7 +60,7 @@ func (m model) tabBar() string {
 func (m model) footer() string {
 	k := func(key, desc string) string { return keyStyle.Render(key) + footerStyle.Render(" "+desc) }
 	hints := []string{
-		k("1-3/⭾", "вкладки"),
+		k("1-4/⭾", "вкладки"),
 		k("s", "тест скорости"),
 		k("q", "выход"),
 	}
@@ -247,6 +249,73 @@ func anomalyDecor(h probe.Hop) (flag string, lossStyle lipgloss.Style, avgStr st
 		avgStyle = avgStyle.Bold(true)
 	}
 	return flag, lossStyle, avgStr, avgStyle
+}
+
+// ---- Diagnosis tab ----
+
+func (m model) viewDiagnosis() string {
+	if !m.haveTrace {
+		return m.spin.View() + " собираю маршрут для диагноза…"
+	}
+	t := m.trace
+	if t.Err != "" {
+		return lipgloss.NewStyle().Foreground(cBad).Render("Ошибка: " + t.Err)
+	}
+	if len(t.Diagnosis.Segments) == 0 {
+		return labelStyle.Render("Маршрут ещё пуст.")
+	}
+
+	heading := labelStyle.Render("Маршрут до ") + bold.Render(t.Target)
+	overall := overallVerdict(t.Diagnosis)
+	lines := []string{heading, overall, ""}
+
+	rangeW := 9
+	labelW := 28
+
+	for _, seg := range t.Diagnosis.Segments {
+		mark, color := segmentMark(seg)
+		markCell := lipgloss.NewStyle().Foreground(color).Bold(true).Width(2).Render(mark)
+		labelCell := lipgloss.NewStyle().Width(labelW).Render(truncate(seg.Label, labelW))
+		rangeCell := lipgloss.NewStyle().Width(rangeW).Foreground(cDim).Render(hopRange(seg))
+		lines = append(lines, markCell+" "+labelCell+rangeCell)
+		if !seg.Healthy && seg.Issue != "" {
+			indent := strings.Repeat(" ", 3)
+			lines = append(lines, indent+lipgloss.NewStyle().Foreground(color).Render("→ "+seg.Issue))
+		}
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+// segmentMark picks the indicator glyph and color for a segment based on its
+// health. Healthy segments get ✓ green; problematic ones ⚠ red.
+func segmentMark(s probe.Segment) (string, lipgloss.Color) {
+	if !s.Healthy {
+		return "⚠", cBad
+	}
+	if s.Kind == probe.SegmentUnknown {
+		return "·", cDim
+	}
+	return "✓", cGood
+}
+
+func hopRange(s probe.Segment) string {
+	if s.HopFrom == s.HopTo {
+		return fmt.Sprintf("хоп %d", s.HopFrom)
+	}
+	return fmt.Sprintf("хопы %d-%d", s.HopFrom, s.HopTo)
+}
+
+// overallVerdict summarises the segments into one line: which segment first
+// went bad, or that everything is fine.
+func overallVerdict(d probe.Diagnosis) string {
+	for _, s := range d.Segments {
+		if !s.Healthy {
+			return labelStyle.Render("Состояние: ") +
+				lipgloss.NewStyle().Bold(true).Foreground(cBad).Render("проблема в зоне «"+s.Label+"»")
+		}
+	}
+	return labelStyle.Render("Состояние: ") +
+		lipgloss.NewStyle().Bold(true).Foreground(cGood).Render("маршрут здоров")
 }
 
 // ---- Speed tab ----
