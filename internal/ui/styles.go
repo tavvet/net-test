@@ -12,6 +12,7 @@ import (
 var (
 	cGood   = lipgloss.Color("42")  // green
 	cOK     = lipgloss.Color("220") // yellow
+	cWarn   = lipgloss.Color("208") // orange
 	cBad    = lipgloss.Color("203") // red
 	cAccent = lipgloss.Color("39")  // cyan/blue
 	cDim    = lipgloss.Color("245")
@@ -119,18 +120,76 @@ func bar(frac float64, width int, color lipgloss.Color) string {
 	return full + empty
 }
 
-// verdict gives a human label + color for overall link quality.
-func verdict(lossPct, jitterMs float64) (string, lipgloss.Color) {
+// quality is a link-quality severity level, from best to worst.
+type quality int
+
+const (
+	qPerfect quality = iota
+	qGood
+	qBad
+	qCritical
+)
+
+// lossQuality classifies packet loss into a severity level.
+func lossQuality(pct float64) quality {
 	switch {
-	case lossPct >= 10 || jitterMs > 50:
-		return "Плохо", cBad
-	case lossPct >= 2 || jitterMs > 20:
-		return "Нестабильно", cOK
-	case lossPct > 0 || jitterMs > 8:
-		return "Хорошо", cGood
+	case pct > 5:
+		return qCritical
+	case pct > 1:
+		return qBad
+	case pct > 0:
+		return qGood
+	default:
+		return qPerfect
+	}
+}
+
+// jitterQuality classifies jitter (ms) into a severity level.
+func jitterQuality(ms float64) quality {
+	switch {
+	case ms > 50:
+		return qCritical
+	case ms > 20:
+		return qBad
+	case ms > 8:
+		return qGood
+	default:
+		return qPerfect
+	}
+}
+
+func (q quality) labelColor() (string, lipgloss.Color) {
+	switch q {
+	case qCritical:
+		return "Критично", cBad
+	case qBad:
+		return "Плохо", cWarn
+	case qGood:
+		return "Хорошо", cOK
 	default:
 		return "Отлично", cGood
 	}
+}
+
+// verdict combines per-factor severities into an overall quality label, a color,
+// and a short reason naming the dominant factor (empty when quality is perfect).
+// It intentionally ignores absolute RTT — a stable link to a distant host is
+// fine — and judges only on loss and jitter.
+func verdict(lossPct, jitterMs float64) (label, reason string, color lipgloss.Color) {
+	lq, jq := lossQuality(lossPct), jitterQuality(jitterMs)
+	worst := lq
+	if jq > worst {
+		worst = jq
+	}
+	label, color = worst.labelColor()
+	if worst > qPerfect {
+		if lq >= jq {
+			reason = fmt.Sprintf("потери %.1f%%", lossPct)
+		} else {
+			reason = fmt.Sprintf("джиттер %.0f ms", jitterMs)
+		}
+	}
+	return label, reason, color
 }
 
 // fmtRTT formats a duration as milliseconds, or a dash when zero.
