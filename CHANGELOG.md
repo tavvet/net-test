@@ -5,6 +5,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-17
+
 ### Added
 - **Android-приложение** — GUI на [Fyne](https://fyne.io) поверх того же
   `internal/probe`, без переписывания ядра: те же четыре вкладки
@@ -54,5 +56,6 @@
 - Устранены утечки горутин/записей в фоновых кэшах (`dnsCache`/`asnCache`) и
   гонка данных в speed-тесте; фоновые резолвы прерываются по отмене контекста.
 
-[Unreleased]: https://github.com/tavvet/net-test/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/tavvet/net-test/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/tavvet/net-test/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tavvet/net-test/releases/tag/v0.1.0
