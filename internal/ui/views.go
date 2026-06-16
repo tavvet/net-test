@@ -106,12 +106,13 @@ var traceCols = []struct {
 	w     int
 	right bool
 }{
+	{"", 2, false}, // anomaly flag: "⚠" or blank
 	{"#", 3, true},
 	{"Хост / IP", 0, false}, // flex
 	{"Потери", 8, true},
 	{"Отпр", 5, true},
 	{"Послед", 9, true},
-	{"Сред", 9, true},
+	{"Сред", 11, true}, // wider: also shows "+ΔX" suffix on flagged hops
 	{"Лучш", 9, true},
 	{"Худш", 9, true},
 	{"СКО", 8, true},
@@ -165,22 +166,46 @@ func (m model) viewTrace() string {
 			}
 		}
 		host = truncate(host, hostW)
-		lossStr := fmt.Sprintf("%.0f%%", h.LossPct)
 
+		flag, lossStyle, avgStr, avgStyle := anomalyDecor(h)
+		dimStyle := lipgloss.NewStyle().Foreground(cDim)
 		cells := []string{
-			cell(fmt.Sprintf("%d", h.TTL), colW(0), true, lipgloss.NewStyle().Foreground(cDim)),
-			cell(host, colW(1), false, hc),
-			cell(lossStr, colW(2), true, lipgloss.NewStyle().Foreground(colorLoss(h.LossPct))),
-			cell(fmt.Sprintf("%d", h.Sent), colW(3), true, lipgloss.NewStyle().Foreground(cDim)),
-			cell(rttCell(h.LastRTT), colW(4), true, lipgloss.NewStyle().Foreground(colorRTT(ms(h.LastRTT)))),
-			cell(rttCell(h.AvgRTT), colW(5), true, lipgloss.NewStyle().Foreground(colorRTT(ms(h.AvgRTT)))),
-			cell(rttCell(h.BestRTT), colW(6), true, lipgloss.NewStyle().Foreground(cDim)),
-			cell(rttCell(h.WorstRTT), colW(7), true, lipgloss.NewStyle().Foreground(cDim)),
-			cell(rttCell(h.StdDev), colW(8), true, lipgloss.NewStyle().Foreground(cDim)),
+			cell(flag, colW(0), false, lipgloss.NewStyle().Foreground(cBad).Bold(true)),
+			cell(fmt.Sprintf("%d", h.TTL), colW(1), true, dimStyle),
+			cell(host, colW(2), false, hc),
+			cell(fmt.Sprintf("%.0f%%", h.LossPct), colW(3), true, lossStyle),
+			cell(fmt.Sprintf("%d", h.Sent), colW(4), true, dimStyle),
+			cell(rttCell(h.LastRTT), colW(5), true, lipgloss.NewStyle().Foreground(colorRTT(ms(h.LastRTT)))),
+			cell(avgStr, colW(6), true, avgStyle),
+			cell(rttCell(h.BestRTT), colW(7), true, dimStyle),
+			cell(rttCell(h.WorstRTT), colW(8), true, dimStyle),
+			cell(rttCell(h.StdDev), colW(9), true, dimStyle),
 		}
 		rows = append(rows, strings.Join(cells, " "))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// anomalyDecor turns a hop's *Persists/DeltaRTT flags into render decorations
+// for the trace row: a flag glyph, the styled loss cell, and the avg-RTT cell
+// (which may carry a "+ΔX" suffix on hops with persistent RTT rise).
+func anomalyDecor(h probe.Hop) (flag string, lossStyle lipgloss.Style, avgStr string, avgStyle lipgloss.Style) {
+	if h.LossPersists || h.RTTPersists {
+		flag = "⚠"
+	}
+
+	lossStyle = lipgloss.NewStyle().Foreground(colorLoss(h.LossPct))
+	if h.LossPersists {
+		lossStyle = lossStyle.Bold(true)
+	}
+
+	avgStr = rttCell(h.AvgRTT)
+	avgStyle = lipgloss.NewStyle().Foreground(colorRTT(ms(h.AvgRTT)))
+	if h.RTTPersists && h.DeltaRTT > 0 {
+		avgStr = fmt.Sprintf("%s +%.0f", avgStr, ms(h.DeltaRTT))
+		avgStyle = avgStyle.Bold(true)
+	}
+	return flag, lossStyle, avgStr, avgStyle
 }
 
 // ---- Speed tab ----

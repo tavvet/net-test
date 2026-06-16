@@ -22,6 +22,13 @@ type Hop struct {
 	WorstRTT time.Duration
 	AvgRTT   time.Duration
 	StdDev   time.Duration
+
+	// Persistent-anomaly markers, filled by markAnomalies. A hop is flagged
+	// only when the issue continues to the end of the route (real problem),
+	// not when it appears on one hop only (usually ICMP rate-limiting).
+	DeltaRTT     time.Duration // AvgRTT − AvgRTT of previous hop; 0 if undefined
+	LossPersists bool          // significant loss that propagates down the route
+	RTTPersists  bool          // RTT rise that does not recover on later hops
 }
 
 // TraceSnapshot is the full per-hop table as of the latest probing cycle.
@@ -124,6 +131,7 @@ func (tr *Tracer) Run(ctx context.Context, out chan<- TraceSnapshot) {
 			}
 			hops = append(hops, h)
 		}
+		markAnomalies(hops)
 		if !emit(ctx, out, TraceSnapshot{Target: tr.target, IP: tr.ip.String(), Hops: hops}) {
 			return
 		}
