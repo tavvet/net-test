@@ -85,6 +85,33 @@ func TestSnapshot(t *testing.T) {
 	}
 }
 
+func TestVerdict(t *testing.T) {
+	cases := []struct {
+		loss, jitter float64
+		wantLabel    string
+		wantReason   string // substring; "" means reason must be empty
+	}{
+		{0, 2, "Отлично", ""},
+		{0, 12, "Хорошо", "джиттер"},
+		{0.5, 3, "Хорошо", "потери"},
+		{3.2, 5, "Плохо", "потери 3.2%"},
+		{0, 25, "Плохо", "джиттер 25 ms"},
+		{7, 5, "Критично", "потери 7.0%"},
+	}
+	for _, c := range cases {
+		label, reason, _ := verdict(c.loss, c.jitter)
+		if label != c.wantLabel {
+			t.Errorf("verdict(%.1f, %.1f) label = %q, want %q", c.loss, c.jitter, label, c.wantLabel)
+		}
+		if c.wantReason == "" && reason != "" {
+			t.Errorf("verdict(%.1f, %.1f) reason = %q, want empty", c.loss, c.jitter, reason)
+		}
+		if c.wantReason != "" && !strings.Contains(reason, c.wantReason) {
+			t.Errorf("verdict(%.1f, %.1f) reason = %q, want contains %q", c.loss, c.jitter, reason, c.wantReason)
+		}
+	}
+}
+
 func TestSparklineLength(t *testing.T) {
 	// Loss markers and blocks should each occupy one cell.
 	s := sparkline([]float64{10, 0, 20, 30}, 10)
