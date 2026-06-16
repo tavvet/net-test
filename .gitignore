@@ -2,4 +2,9 @@
 /net-test
 /dist/
 *.exe
+*.apk
+/mobile/app/app
 _review_progress.md
+
+# macOS Finder cruft
+.DS_Store

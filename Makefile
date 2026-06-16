@@ -90,6 +90,44 @@ dist: darwin-amd64 darwin-arm64 linux-amd64 linux-arm64 windows-amd64 windows-38
 checksums: ## sha256 для бинарников в dist/
 	@cd $(DIST) && shasum -a 256 $(BINARY)-* > SHA256SUMS && cat SHA256SUMS
 
+# --- Android (Fyne APK) ---
+# SDK/NDK ищутся автоматически; переопределить — из командной строки:
+#   make apk ANDROID_NDK_HOME=/путь/к/ndk
+# ABI: по умолчанию android/arm64 (≈все телефоны); все ABI — ANDROID_ABIS=android
+ANDROID_HOME     ?= $(HOME)/Library/Android/sdk
+ANDROID_NDK_HOME ?= $(firstword $(wildcard $(ANDROID_HOME)/ndk/*))
+ANDROID_ABIS     ?= android/arm64
+ANDROID_APPID    ?= com.tavvet.nettest
+# Каталог go-бинарников: уважаем пользовательский GOBIN, иначе GOPATH/bin.
+GOBIN            := $(shell go env GOBIN)
+ifeq ($(strip $(GOBIN)),)
+GOBIN            := $(shell go env GOPATH)/bin
+endif
+# Fyne требует CGO (NDK-clang компилит C-glue) — поверх глобального CGO=0.
+ANDROID_ENV       = CGO_ENABLED=1 ANDROID_HOME='$(ANDROID_HOME)' ANDROID_NDK_HOME='$(ANDROID_NDK_HOME)'
+
+.PHONY: icon
+icon: ## Перегенерировать mobile/app/Icon.png
+	cd mobile/app && go run gen.go
+
+.PHONY: apk
+apk: ## Android APK (Fyne GUI, mobile/app) → dist/net-test.apk
+	@test -x $(GOBIN)/fyne || { echo "нет fyne CLI: go install fyne.io/tools/cmd/fyne@latest"; exit 1; }
+	@test -d '$(ANDROID_NDK_HOME)' || { echo "NDK не найден: задайте ANDROID_NDK_HOME (искал $(ANDROID_HOME)/ndk/*)"; exit 1; }
+	@mkdir -p $(DIST)
+	@echo "  → $(DIST)/net-test.apk  (NDK: $(ANDROID_NDK_HOME); $(ANDROID_ABIS))"
+	cd mobile/app && $(ANDROID_ENV) \
+		$(GOBIN)/fyne package -os $(ANDROID_ABIS) -appID $(ANDROID_APPID) -name net-test -icon Icon.png
+	@mv mobile/app/*.apk $(DIST)/net-test.apk
+
+.PHONY: gui
+gui: ## Fyne-GUI десктоп-окном (быстрая отладка UI)
+	cd mobile/app && CGO_ENABLED=1 go run .
+
+.PHONY: test-mobile
+test-mobile: ## Тесты Fyne-приложения (CGO; отдельный модуль mobile/app)
+	cd mobile/app && CGO_ENABLED=1 go test ./...
+
 .PHONY: clean
 clean: ## Удалить бинарники и dist/
 	rm -rf $(DIST) $(BINARY)

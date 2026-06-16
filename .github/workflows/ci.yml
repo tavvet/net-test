@@ -23,6 +23,11 @@ jobs:
           go-version: stable
       - run: go vet ./...
       - run: go test ./...   # сетевые тесты gated за NETTEST_LIVE, тут не идут
+      # Fyne-приложение — отдельный модуль (свой go.mod, CGO). Собирается без
+      # доустановки системных библиотек только на macOS, поэтому гоняем там.
+      - name: test mobile (Fyne)
+        if: matrix.os == 'macos-latest'
+        run: cd mobile/app && go test ./...
 
   race:
     name: race (linux)

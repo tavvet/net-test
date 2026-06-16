@@ -21,7 +21,8 @@ make vet           # go vet ./...
 ```
 
 Перед PR прогоните как минимум `make fmt vet test`, а при правках в
-`internal/probe` — ещё и `make test-race` и `make live`.
+`internal/probe` — ещё и `make test-race` и `make live`; при правках в
+`mobile/app` — `make test-mobile`.
 
 ## Стиль кода
 
@@ -43,6 +44,9 @@ make vet           # go vet ./...
 - `internal/ui` — только отображение готовых снапшотов.
 - `internal/report` — отдельный wire-формат для `--once`/`--json`; меняйте его
   JSON-теги осознанно, это публичный контракт.
+- `mobile/app` — Android/desktop GUI на Fyne, **отдельный модуль** (свой `go.mod`,
+  тяжёлые зависимости Fyne не текут в ядро). Импортирует `internal/probe` напрямую;
+  сборка `make apk`/`make gui` (нужны CGO + Android NDK), тесты — `make test-mobile`.
 
 См. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

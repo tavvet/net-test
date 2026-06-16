@@ -9,7 +9,8 @@
    (`PingStats`, `TraceSnapshot`, `SpeedProgress`) и шлёт их в каналы. Вся
    аналитика (аномалии, диагноз, ASN) тоже живёт здесь — UI и отчёт только
    отображают готовые поля. `probe` не импортирует ничего внутреннего, поэтому
-   переиспользуется и в TUI, и в headless-режиме, и потенциально в `gomobile`.
+   переиспользуется и в TUI (Bubble Tea), и в headless-режиме (`--once`), и в
+   мобильном GUI ([mobile/app](../mobile/app) на Fyne) — без дублирования логики.
 2. **Один платформенный шов.** Всё, что зависит от ОС, спрятано за интерфейсом
    `prober`. Остальной код собирается под любую платформу без правок.
 3. **Без внешних бинарников и без root.** ICMP делается напрямую: unprivileged
@@ -33,10 +34,13 @@ graph TD
   probe --> xnet["x/net/icmp<br/>(darwin, linux)"]
   probe --> xsys["x/sys/windows<br/>(windows)"]
   ui --> charm["Bubble Tea + Lip Gloss"]
+  mobile["mobile/app<br/>Fyne GUI (Android)"] --> probe
+  mobile --> fyne["Fyne (отдельный модуль)"]
 ```
 
 Направление зависимостей строго одностороннее: `main → {ui, probe, report}`,
-`ui → probe`, `report → probe`. `probe` не зависит ни от чего внутреннего.
+`ui → probe`, `report → probe`, `mobile/app → probe`. `probe` не зависит ни от
+чего внутреннего.
 
 ```
 internal/probe/
@@ -45,6 +49,7 @@ internal/probe/
   prober_windows.go  # //go:build windows — iphlpapi.IcmpSendEcho
   helpers.go         # экспортные IsLocalIP / ShortenASName / Millis
   ping.go            # Pinger: RTT/потери/джиттер + скользящее окно вердикта
+  quality.go         # Quality: severity вердикта (потери/джиттер), общий для UI
   trace.go           # Tracer: mtr-стиль, пул проберов, dnsCache
   anomaly.go         # markAnomalies: persistent-vs-transient флаги хопов
   asn.go             # asnCache: ASN-обогащение через Team Cymru DNS
@@ -58,6 +63,7 @@ internal/ui/
   views.go           # рендер вкладок (Пинг / Маршрут / Диагноз / Скорость)
   styles.go          # палитра, спарклайн, вердикт, бары
 main.go              # флаги; runTUI (Bubble Tea) либо runHeadless (--once)
+mobile/app/          # Fyne GUI (Android/desktop) — отдельный модуль; см. ниже
 ```
 
 ## Модель конкуренции
@@ -137,6 +143,10 @@ API). `ok == false` означает таймаут.
   качества берётся из окна**, чтобы одна ранняя потеря (1 из 55 ≈ 1.8 %) не
   «залипала» на минуты. Пока проб меньше `MinVerdictSamples` (10), UI показывает
   «Собираю данные…» вместо случайного вердикта.
+
+Пороги severity (потери/джиттер → Отлично/Хорошо/Плохо/Критично) живут в
+[quality.go](../internal/probe/quality.go) (`probe.Quality`) — один источник для
+TUI и мобильного UI, метки/цвета каждый рисует сам.
 
 История — кольцо последних 120 значений (мс, `0` = потеря); копируется при каждом
 `emit`, т.к. UI читает её из своей горутины.
@@ -230,6 +240,32 @@ sequenceDiagram
 `trace.healthy` для cron-алертов. Секция выводится, если есть данные **или**
 ошибка. `WriteJSON` и `WriteText` независимы; текстовый формат — для тикетов ISP.
 
+## Мобильное приложение (Fyne)
+
+[mobile/app](../mobile/app) — GUI на [Fyne](https://fyne.io) для Android (тем же
+кодом — десктоп-окно для отладки). Это **отдельный модуль** (свой `go.mod`,
+`replace` на корень), чтобы тяжёлые зависимости Fyne не попадали в почти-stdlib
+ядро. UI ничего не переписывает: импортирует `internal/probe` напрямую и
+переиспользует те же снапшоты и `probe.Quality`, что и TUI.
+
+- **Сборка.** `fyne package` компилит Go → APK напрямую через NDK, без Android
+  Studio: `make apk` → `dist/net-test.apk` (arm64, minSdk 21; `ANDROID_ABIS=android`
+  — все ABI). `make gui` — то же приложение десктоп-окном, `make test-mobile` —
+  тесты модуля (CGO), `make icon` — перегенерить иконку ([gen.go](../mobile/app/gen.go)).
+- **Структура.** `newView()` строит дерево виджетов (4 вкладки), `wire()` навешивает
+  поведение. `newView` без побочных эффектов, поэтому headless-рендер
+  ([render_test.go](../mobile/app/render_test.go)) снимает PNG вкладок на
+  software-канвасе — без дисплея и GPU.
+- **Конкуренция.** Снапшоты probe приходят в фоновых горутинах; обновления виджетов
+  идут через `fyne.Do` (Fyne v2.7 требует главного потока). Каждый прогон помечен
+  `epoch`'ом — кадр, поставленный в очередь перед «Стоп»/рестартом, не перерисует
+  новый прогон. DNS-резолв цели уходит в горутину, чтобы медленный хост не морозил
+  UI. Контекст общий на приложение: закрытие окна отменяет все измерения (важно на
+  Android, где Go-процесс переживает Activity).
+- **ICMP.** Android — это Linux, поэтому работает тот же `prober_posix.go`
+  (unprivileged datagram-сокет); нужен лишь `INTERNET` permission (Fyne добавляет
+  его сам). Проверено на реальном устройстве.
+
 ## Как добавить платформенный бэкенд
 
 1. Создать `prober_<os>.go` с build-тегом нужной платформы.
@@ -245,6 +281,7 @@ sequenceDiagram
 |---|---|
 | `make test` | рендер всех вкладок + юнит-логика probe (windowStats, markAnomalies, BuildDiagnosis, asnCache с фейк-часами) + wire-формат report — всё без сети |
 | `make test-race` | то же под детектором гонок (важно для proberPool, кэшей, measureStreams) |
+| `make test-mobile` | тесты Fyne-приложения (`mobile/app`, отдельный модуль, CGO): форматтеры + рендер вкладок |
 | `make live` | живой пинг+трасса одновременно и ASN-резолв (gated `NETTEST_LIVE`) |
 | `NETTEST_SNAPSHOT=1 go test -run Snapshot ./internal/ui -v` | печать кадров TUI |
 
