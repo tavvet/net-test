@@ -24,38 +24,65 @@ type asnInfo struct {
 	name string // "CLOUDFLARENET - Cloudflare, Inc., US"
 }
 
+// asnFailTTL is how long a failed lookup (timeout, NXDOMAIN, empty answer) is
+// remembered before we try again. Successful and private results are cached
+// for the whole session — ASN mappings change rarely. A short retry window
+// keeps a single transient DNS hiccup from blanking a hop's AS for the rest
+// of the run, without hammering Cymru on every cycle.
+const asnFailTTL = 60 * time.Second
+
+// asnEntry is a cached lookup. A zero expires means "permanent" (a success or
+// a private IP); a non-zero expires marks a failure that should be retried
+// once now() passes it.
+type asnEntry struct {
+	info    asnInfo
+	expires time.Time
+}
+
 // asnCache resolves IPs to AS metadata lazily and remembers the result.
 // Concurrent lookups for the same IP are deduplicated. The parent ctx is the
 // Tracer's run context — cancellation aborts in-flight Cymru lookups instead
 // of running to their own timeout.
 type asnCache struct {
 	mu      sync.Mutex
-	results map[string]asnInfo
+	results map[string]asnEntry
 	pending map[string]struct{}
 	parent  context.Context
+
+	// Injectable for tests; default to the real clock / Cymru resolver.
+	now       func() time.Time
+	failTTL   time.Duration
+	resolveFn func(ctx context.Context, ip string) (asnInfo, bool)
 }
 
 func newASNCache(parent context.Context) *asnCache {
 	return &asnCache{
-		results: map[string]asnInfo{},
-		pending: map[string]struct{}{},
-		parent:  parent,
+		results:   map[string]asnEntry{},
+		pending:   map[string]struct{}{},
+		parent:    parent,
+		now:       time.Now,
+		failTTL:   asnFailTTL,
+		resolveFn: cymruResolve,
 	}
 }
 
 // lookup returns the cached ASN info for ip. On the first call for a public
 // IP it kicks off a background resolution and returns an empty value; private
-// IPs (RFC1918, loopback, link-local) are cached as empty immediately — no
-// DNS query is made for them.
+// IPs (RFC1918, loopback, link-local) are cached permanently as empty — no
+// DNS query is made for them. A previously-failed lookup whose TTL has expired
+// is retried.
 func (c *asnCache) lookup(ip string) asnInfo {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if info, ok := c.results[ip]; ok {
-		return info
+	if e, ok := c.results[ip]; ok {
+		if e.expires.IsZero() || c.now().Before(e.expires) {
+			return e.info // permanent, or failure still within its TTL
+		}
+		delete(c.results, ip) // failure TTL expired → fall through and retry
 	}
 	parsed := net.ParseIP(ip)
 	if parsed == nil || isLocalIP(parsed) {
-		c.results[ip] = asnInfo{} // cache miss; no point retrying private/junk IPs
+		c.results[ip] = asnEntry{} // permanent: private/junk IPs have no public AS
 		return asnInfo{}
 	}
 	if _, busy := c.pending[ip]; !busy {
@@ -65,21 +92,31 @@ func (c *asnCache) lookup(ip string) asnInfo {
 	return asnInfo{}
 }
 
-// resolve performs the two TXT lookups and stores the result. Errors and empty
-// answers are stored as empty info so we don't keep retrying a dead IP.
+// resolve performs the lookup in the background and caches the outcome:
+// success permanently, failure with a retry TTL.
 func (c *asnCache) resolve(ip string) {
 	ctx, cancel := context.WithTimeout(c.parent, 3*time.Second)
 	defer cancel()
+	info, ok := c.resolveFn(ctx, ip)
 
-	info := asnInfo{}
-	if num := lookupOriginASN(ctx, ip); num != "" {
-		info.num = "AS" + num
-		info.name = lookupASName(ctx, num)
-	}
 	c.mu.Lock()
-	c.results[ip] = info
+	if ok {
+		c.results[ip] = asnEntry{info: info}
+	} else {
+		c.results[ip] = asnEntry{expires: c.now().Add(c.failTTL)}
+	}
 	delete(c.pending, ip)
 	c.mu.Unlock()
+}
+
+// cymruResolve is the production resolver: two TXT queries to Team Cymru.
+// Returns ok=false on any failure or empty answer.
+func cymruResolve(ctx context.Context, ip string) (asnInfo, bool) {
+	num := lookupOriginASN(ctx, ip)
+	if num == "" {
+		return asnInfo{}, false
+	}
+	return asnInfo{num: "AS" + num, name: lookupASName(ctx, num)}, true
 }
 
 // lookupOriginASN returns the AS number (without "AS" prefix) for an IPv4

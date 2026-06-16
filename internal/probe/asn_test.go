@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -78,8 +79,8 @@ func TestASNCache_PrivateIPSkipped(t *testing.T) {
 	if pending != 0 {
 		t.Errorf("pending = %d, want 0 (private IPs must not trigger lookups)", pending)
 	}
-	if !hasCache || cached.num != "" {
-		t.Errorf("private IP not cached as empty: cached=%+v, hasCache=%v", cached, hasCache)
+	if !hasCache || cached.info.num != "" || !cached.expires.IsZero() {
+		t.Errorf("private IP not cached as permanent-empty: cached=%+v, hasCache=%v", cached, hasCache)
 	}
 }
 
@@ -116,6 +117,84 @@ func TestASNCache_ConcurrentLookupsRaceFree(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+// waitForCalls polls an atomic counter until it reaches want or times out.
+func waitForCalls(t *testing.T, calls *int32, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(calls) >= want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("resolveFn calls = %d, want %d within 2s", atomic.LoadInt32(calls), want)
+}
+
+// fakeClock is a goroutine-safe test clock: the background resolve goroutine
+// reads c.now() while the test advances it, so a plain variable would race.
+type fakeClock struct{ nanos atomic.Int64 }
+
+func newFakeClock() *fakeClock {
+	c := &fakeClock{}
+	c.nanos.Store(time.Now().UnixNano())
+	return c
+}
+func (c *fakeClock) now() time.Time          { return time.Unix(0, c.nanos.Load()) }
+func (c *fakeClock) advance(d time.Duration) { c.nanos.Add(int64(d)) }
+
+func TestASNCache_SuccessCachedPermanently(t *testing.T) {
+	clk := newFakeClock()
+	var calls int32
+	c := newASNCache(context.Background())
+	c.now = clk.now
+	c.resolveFn = func(ctx context.Context, ip string) (asnInfo, bool) {
+		atomic.AddInt32(&calls, 1)
+		return asnInfo{num: "AS13335", name: "CLOUDFLARENET"}, true
+	}
+
+	c.lookup("1.1.1.1") // triggers resolve #1
+	waitForCalls(t, &calls, 1)
+
+	// Result is now cached. Advance the clock an hour: a successful entry must
+	// NOT expire, so no second resolve and the info is returned directly.
+	clk.advance(time.Hour)
+	got := c.lookup("1.1.1.1")
+	if got.num != "AS13335" {
+		t.Errorf("got %+v, want AS13335 from cache", got)
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("resolveFn called %d times, want 1 (success must be permanent)", n)
+	}
+}
+
+func TestASNCache_FailureRetriesAfterTTL(t *testing.T) {
+	clk := newFakeClock()
+	var calls int32
+	c := newASNCache(context.Background())
+	c.now = clk.now
+	c.failTTL = 30 * time.Second
+	c.resolveFn = func(ctx context.Context, ip string) (asnInfo, bool) {
+		atomic.AddInt32(&calls, 1)
+		return asnInfo{}, false // always fails
+	}
+
+	c.lookup("8.8.8.8") // resolve #1
+	waitForCalls(t, &calls, 1)
+
+	// Within the TTL: lookup must NOT re-trigger.
+	clk.advance(10 * time.Second)
+	c.lookup("8.8.8.8")
+	time.Sleep(50 * time.Millisecond)
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Fatalf("resolveFn called %d times within TTL, want 1", n)
+	}
+
+	// Past the TTL: lookup must retry.
+	clk.advance(25 * time.Second) // total 35s > 30s TTL
+	c.lookup("8.8.8.8")
+	waitForCalls(t, &calls, 2)
 }
 
 // TestASNCache_LiveLookup hits the real Team Cymru DNS and is gated by
