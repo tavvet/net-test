@@ -28,8 +28,12 @@ func sampleModel() model {
 		Target: "1.1.1.1", IP: "1.1.1.1",
 		Hops: []probe.Hop{
 			{TTL: 1, IP: "10.0.1.1", Host: "router.lan", Sent: 10, Recv: 10, LastRTT: 1 * time.Millisecond, AvgRTT: 1 * time.Millisecond},
-			{TTL: 2, IP: "", Sent: 10, Recv: 0, LossPct: 100},
-			{TTL: 3, IP: "1.1.1.1", Sent: 10, Recv: 9, LossPct: 10, LastRTT: 14 * time.Millisecond, AvgRTT: 15 * time.Millisecond, StdDev: 3 * time.Millisecond},
+			// hop 2: 20% loss, but later hops clean → transient, must NOT show flag
+			{TTL: 2, IP: "5.180.172.2", Sent: 10, Recv: 8, LossPct: 20, LastRTT: 12 * time.Millisecond, AvgRTT: 12 * time.Millisecond},
+			{TTL: 3, IP: "212.237.216.242", Sent: 10, Recv: 10, LastRTT: 14 * time.Millisecond, AvgRTT: 14 * time.Millisecond},
+			// hop 4: persistent loss + RTT rise → MUST show flag and Δ
+			{TTL: 4, IP: "162.158.236.14", Sent: 10, Recv: 8, LossPct: 20, LastRTT: 50 * time.Millisecond, AvgRTT: 50 * time.Millisecond, WorstRTT: 190 * time.Millisecond, StdDev: 38 * time.Millisecond, DeltaRTT: 36 * time.Millisecond, LossPersists: true, RTTPersists: true},
+			{TTL: 5, IP: "1.1.1.1", Host: "one.one.one.one", Sent: 10, Recv: 8, LossPct: 20, LastRTT: 52 * time.Millisecond, AvgRTT: 52 * time.Millisecond, StdDev: 9 * time.Millisecond, LossPersists: true},
 		},
 	}
 	m.speed = probe.SpeedProgress{
@@ -65,7 +69,8 @@ func TestViewTraceContent(t *testing.T) {
 	m := sampleModel()
 	m.tab = tabTrace
 	out := m.View()
-	for _, want := range []string{"Хост", "10.0.1.1", "*", "1.1.1.1"} {
+	// "⚠" must appear (persistent anomaly on hop 4) and "+36" — the Δ suffix.
+	for _, want := range []string{"Хост", "10.0.1.1", "1.1.1.1", "⚠", "+36"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("trace view missing %q", want)
 		}
