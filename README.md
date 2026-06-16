@@ -118,6 +118,7 @@ make fmt vet       # форматирование и статанализ
 
 Как устроен код и как добавить платформенный бэкенд — см.
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) и [CONTRIBUTING.md](CONTRIBUTING.md).
+Планы развития — в [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Ограничения
 
