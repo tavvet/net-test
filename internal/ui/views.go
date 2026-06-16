@@ -85,12 +85,7 @@ func (m model) viewPing() string {
 		stat("Потери", fmt.Sprintf("%.1f%%", p.LossPct), colorLoss(p.LossPct)),
 	)
 
-	label, reason, vc := verdict(p.LossPct, ms(p.Jitter))
-	qText := lipgloss.NewStyle().Bold(true).Foreground(vc).Render(label)
-	if reason != "" {
-		qText += labelStyle.Render(" (" + reason + ")")
-	}
-	verdictLine := labelStyle.Render("Качество: ") + qText +
+	verdictLine := labelStyle.Render("Качество: ") + verdictText(p) +
 		labelStyle.Render(fmt.Sprintf("   отправлено %d · получено %d · min %s · max %s",
 			p.Sent, p.Recv, fmtRTT(p.BestRTT), fmtRTT(p.WorstRTT)))
 

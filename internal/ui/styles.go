@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tavvet/net-test/internal/probe"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -169,6 +171,24 @@ func (q quality) labelColor() (string, lipgloss.Color) {
 	default:
 		return "Отлично", cGood
 	}
+}
+
+// verdictText returns the rendered "Качество: …" value: either the four-level
+// verdict over the rolling window, or a neutral "Собираю данные…" placeholder
+// while the window is still too small to be reliable. Using the rolling window
+// (not the session-global counters) is what stops a single early-lost packet
+// from pinning the verdict at "Плохо" for the rest of the session.
+func verdictText(p probe.PingStats) string {
+	if p.WindowSize < probe.MinVerdictSamples {
+		return lipgloss.NewStyle().Foreground(cDim).Render("Собираю данные…") +
+			labelStyle.Render(fmt.Sprintf(" (%d/%d)", p.WindowSize, probe.MinVerdictSamples))
+	}
+	label, reason, vc := verdict(p.WindowLossPct, ms(p.WindowJitter))
+	out := lipgloss.NewStyle().Bold(true).Foreground(vc).Render(label)
+	if reason != "" {
+		out += labelStyle.Render(" (" + reason + ")")
+	}
+	return out
 }
 
 // verdict combines per-factor severities into an overall quality label, a color,

@@ -35,7 +35,24 @@ type PingStats struct {
 	Jitter   time.Duration // RFC 3550 inter-arrival estimate
 	History  []float64     // recent RTTs in ms; 0 marks a lost probe
 	Err      string
+
+	// Rolling-window stats from the last VerdictWindow probes. Used by the
+	// UI's quality verdict so a single lost packet doesn't keep "Плохо"
+	// stuck for minutes. The session-global Sent/Recv/LossPct are kept for
+	// the headline counters; only the verdict is window-based.
+	WindowSize    int
+	WindowLossPct float64
+	WindowJitter  time.Duration
 }
+
+// VerdictWindow is how many recent probes the rolling-window stats look at.
+// With the default 1s interval this is the last 30 seconds. MinVerdictSamples
+// is the smallest window that produces a verdict; below it the UI shows
+// "Собираю данные…" rather than reacting to a partial sample.
+const (
+	VerdictWindow     = 30
+	MinVerdictSamples = 10
+)
 
 // Pinger continuously pings a single target and emits a PingStats after each probe.
 type Pinger struct {
@@ -107,18 +124,22 @@ func (pg *Pinger) Run(ctx context.Context, out chan<- PingStats) {
 		if recv > 0 {
 			avg = time.Duration(sumRTT / float64(recv) * float64(time.Millisecond))
 		}
+		winSize, winLoss, winJit := windowStats(hist, VerdictWindow)
 		snap := PingStats{
-			Target:   pg.target,
-			IP:       pg.ip.String(),
-			Sent:     sent,
-			Recv:     recv,
-			LossPct:  float64(sent-recv) / float64(sent) * 100,
-			LastRTT:  last,
-			BestRTT:  best,
-			WorstRTT: worst,
-			AvgRTT:   avg,
-			Jitter:   time.Duration(jitter * float64(time.Millisecond)),
-			History:  append([]float64(nil), hist...), // copy: UI reads concurrently
+			Target:        pg.target,
+			IP:            pg.ip.String(),
+			Sent:          sent,
+			Recv:          recv,
+			LossPct:       float64(sent-recv) / float64(sent) * 100,
+			LastRTT:       last,
+			BestRTT:       best,
+			WorstRTT:      worst,
+			AvgRTT:        avg,
+			Jitter:        time.Duration(jitter * float64(time.Millisecond)),
+			History:       append([]float64(nil), hist...), // copy: UI reads concurrently
+			WindowSize:    winSize,
+			WindowLossPct: winLoss,
+			WindowJitter:  winJit,
 		}
 		if !emit(ctx, out, snap) {
 			return
@@ -130,6 +151,42 @@ func (pg *Pinger) Run(ctx context.Context, out chan<- PingStats) {
 		case <-tick.C:
 		}
 	}
+}
+
+// windowStats computes loss% and mean jitter over the most recent `maxWin`
+// entries of hist (where 0 == lost probe). It returns the window size actually
+// used, the loss percentage, and the jitter as a mean of absolute RTT diffs.
+//
+// Why a separate window: the session-global LossPct keeps a lost first probe
+// stuck at >1% for a long time, which freezes the verdict at "Плохо". A rolling
+// window forgets old noise as soon as the link recovers.
+func windowStats(hist []float64, maxWin int) (size int, lossPct float64, jitter time.Duration) {
+	if len(hist) == 0 {
+		return 0, 0, 0
+	}
+	window := hist
+	if len(window) > maxWin {
+		window = window[len(window)-maxWin:]
+	}
+	size = len(window)
+
+	var rtts []float64
+	for _, v := range window {
+		if v > 0 {
+			rtts = append(rtts, v)
+		}
+	}
+	lossPct = float64(size-len(rtts)) / float64(size) * 100
+
+	if len(rtts) >= 2 {
+		var sum float64
+		for i := 1; i < len(rtts); i++ {
+			sum += math.Abs(rtts[i] - rtts[i-1])
+		}
+		mean := sum / float64(len(rtts)-1)
+		jitter = time.Duration(mean * float64(time.Millisecond))
+	}
+	return size, lossPct, jitter
 }
 
 // emit sends a snapshot unless ctx is done; returns false if the run should stop.
