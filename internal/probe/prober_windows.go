@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -91,7 +92,7 @@ func (w *windowsProber) probe(dst net.IP, ttl, seq int, timeout time.Duration) (
 		millis = 1000
 	}
 
-	n, _, _ := procIcmpSendEcho.Call(
+	n, _, callErr := procIcmpSendEcho.Call(
 		w.handle,
 		uintptr(destAddr),
 		uintptr(unsafe.Pointer(&w.payload[0])),
@@ -102,7 +103,14 @@ func (w *windowsProber) probe(dst net.IP, ttl, seq int, timeout time.Duration) (
 		uintptr(millis),
 	)
 	if n == 0 {
-		return probeResult{}, false, nil // timeout or no reply
+		// No reply was written. GetLastError (callErr) distinguishes a normal
+		// timeout (IP_REQ_TIMED_OUT) — reported as ok=false, no error — from a
+		// real failure like a bad handle or bad parameter, which we surface so
+		// the user sees the cause instead of silent "100% loss".
+		if errno, ok := callErr.(syscall.Errno); ok && errno != 0 && uintptr(errno) != ipReqTimedOut {
+			return probeResult{}, false, fmt.Errorf("IcmpSendEcho: %w", callErr)
+		}
+		return probeResult{}, false, nil // timeout / no reply
 	}
 
 	rep := (*icmpEchoReply)(unsafe.Pointer(&w.reply[0]))
