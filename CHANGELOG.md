@@ -5,7 +5,9 @@
 
 ## [Unreleased]
 
-Готовится первый релиз. Полный набор возможностей:
+## [0.1.0] — 2026-06-17
+
+Первый релиз. Полный набор возможностей:
 
 ### Added
 - TUI на Bubble Tea, **четыре вкладки**: «Пинг», «Маршрут» (mtr-стиль),
@@ -43,4 +45,5 @@
 - Устранены утечки горутин/записей в фоновых кэшах (`dnsCache`/`asnCache`) и
   гонка данных в speed-тесте; фоновые резолвы прерываются по отмене контекста.
 
-[Unreleased]: https://github.com/tavvet/net-test/commits/main
+[Unreleased]: https://github.com/tavvet/net-test/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/tavvet/net-test/releases/tag/v0.1.0
