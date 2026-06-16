@@ -1,0 +1,4 @@
+# build artifacts
+/net-test
+/dist/
+*.exe

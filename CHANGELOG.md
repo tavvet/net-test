@@ -1,0 +1,22 @@
+# Changelog
+
+Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/),
+проект следует [семантическому версионированию](https://semver.org/lang/ru/).
+
+## [Unreleased]
+
+### Added
+- TUI на Bubble Tea с тремя вкладками: «Пинг», «Маршрут» (mtr-стиль), «Скорость».
+- Пинг-монитор: RTT, потери, джиттер (RFC 3550), история-спарклайн, вердикт.
+- Трассировка маршрута: per-hop потери/задержки/СКО, параллельный пул проберов,
+  фоновый reverse-DNS.
+- Тест скорости через Cloudflare: латентность (с прогревом), download и upload.
+- Чистый Go ICMP за интерфейсом `prober`:
+  - unprivileged datagram-сокет на macOS/Linux (без root);
+  - бэкенд на `iphlpapi.IcmpSendEcho` для Windows (без админки).
+- `Makefile` с кросс-сборкой (darwin/linux/windows, amd64/arm64/386), стрипом и
+  инъекцией версии; флаг `-version`.
+- Документация: README, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), CONTRIBUTING.
+- Тесты: рендер вкладок, живой сетевой тест (gated), детектор гонок.
+
+[Unreleased]: https://github.com/tavvet/net-test/commits/main
