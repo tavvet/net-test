@@ -27,15 +27,25 @@ func WriteText(w io.Writer, r Report) error {
 	if r.Ping != nil {
 		p := r.Ping
 		fmt.Fprintf(&b, "\nПинг (%d проб):\n", p.Sent)
-		fmt.Fprintf(&b, "  средний RTT: %.1f ms\n", p.AvgMs)
-		fmt.Fprintf(&b, "  лучший / худший: %.1f / %.1f ms\n", p.BestMs, p.WorstMs)
-		fmt.Fprintf(&b, "  потери: %.1f%% (%d / %d)\n", p.LossPct, p.Sent-p.Recv, p.Sent)
-		fmt.Fprintf(&b, "  джиттер: %.1f ms\n", p.JitterMs)
+		if p.Sent > 0 {
+			fmt.Fprintf(&b, "  средний RTT: %.1f ms\n", p.AvgMs)
+			fmt.Fprintf(&b, "  лучший / худший: %.1f / %.1f ms\n", p.BestMs, p.WorstMs)
+			fmt.Fprintf(&b, "  потери: %.1f%% (%d / %d)\n", p.LossPct, p.Sent-p.Recv, p.Sent)
+			fmt.Fprintf(&b, "  джиттер: %.1f ms\n", p.JitterMs)
+		}
+		if p.Err != "" {
+			fmt.Fprintf(&b, "  ⚠ ошибка: %s\n", p.Err)
+		}
 	}
 
 	if r.Trace != nil {
 		fmt.Fprintf(&b, "\nМаршрут (%d хопов):\n", len(r.Trace.Hops))
-		writeHops(&b, r.Trace.Hops)
+		if len(r.Trace.Hops) > 0 {
+			writeHops(&b, r.Trace.Hops)
+		}
+		if r.Trace.Err != "" {
+			fmt.Fprintf(&b, "  ⚠ ошибка: %s\n", r.Trace.Err)
+		}
 		if len(r.Trace.Diagnosis) > 0 {
 			fmt.Fprintln(&b, "\nДиагноз:")
 			for _, s := range r.Trace.Diagnosis {
@@ -54,11 +64,15 @@ func WriteText(w io.Writer, r Report) error {
 	if r.Speed != nil {
 		s := r.Speed
 		fmt.Fprintln(&b, "\nСкорость:")
-		fmt.Fprintf(&b, "  загрузка ↓: %.1f Mbps\n", s.DownloadMbps)
-		fmt.Fprintf(&b, "  отдача ↑: %.1f Mbps\n", s.UploadMbps)
-		fmt.Fprintf(&b, "  латентность: %.1f ms (джиттер %.1f ms)\n", s.LatencyMs, s.JitterMs)
-		if s.Server != "" {
-			fmt.Fprintf(&b, "  Cloudflare: %s\n", s.Server)
+		if s.Err != "" {
+			fmt.Fprintf(&b, "  ⚠ ошибка: %s\n", s.Err)
+		} else {
+			fmt.Fprintf(&b, "  загрузка ↓: %.1f Mbps\n", s.DownloadMbps)
+			fmt.Fprintf(&b, "  отдача ↑: %.1f Mbps\n", s.UploadMbps)
+			fmt.Fprintf(&b, "  латентность: %.1f ms (джиттер %.1f ms)\n", s.LatencyMs, s.JitterMs)
+			if s.Server != "" {
+				fmt.Fprintf(&b, "  Cloudflare: %s\n", s.Server)
+			}
 		}
 	}
 	_, err := io.WriteString(w, b.String())

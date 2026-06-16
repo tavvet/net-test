@@ -55,6 +55,11 @@ func main() {
 		return
 	}
 
+	if opts.once && opts.duration <= 0 {
+		fmt.Fprintln(os.Stderr, "Ошибка: -duration должен быть больше нуля")
+		os.Exit(2)
+	}
+
 	ip, label, err := probe.Resolve(opts.target)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Ошибка:", err)
