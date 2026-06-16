@@ -183,7 +183,7 @@ func verdictText(p probe.PingStats) string {
 		return lipgloss.NewStyle().Foreground(cDim).Render("Собираю данные…") +
 			labelStyle.Render(fmt.Sprintf(" (%d/%d)", p.WindowSize, probe.MinVerdictSamples))
 	}
-	label, reason, vc := verdict(p.WindowLossPct, ms(p.WindowJitter))
+	label, reason, vc := verdict(p.WindowLossPct, probe.Millis(p.WindowJitter))
 	out := lipgloss.NewStyle().Bold(true).Foreground(vc).Render(label)
 	if reason != "" {
 		out += labelStyle.Render(" (" + reason + ")")

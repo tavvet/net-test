@@ -79,9 +79,9 @@ func (m model) viewPing() string {
 	}
 
 	cards := lipgloss.JoinHorizontal(lipgloss.Top,
-		stat("Текущий RTT", fmtRTT(p.LastRTT), colorRTT(ms(p.LastRTT))),
-		stat("Средний", fmtRTT(p.AvgRTT), colorRTT(ms(p.AvgRTT))),
-		stat("Джиттер", fmtRTT(p.Jitter), colorRTT(ms(p.Jitter)*4)),
+		stat("Текущий RTT", fmtRTT(p.LastRTT), colorRTT(probe.Millis(p.LastRTT))),
+		stat("Средний", fmtRTT(p.AvgRTT), colorRTT(probe.Millis(p.AvgRTT))),
+		stat("Джиттер", fmtRTT(p.Jitter), colorRTT(probe.Millis(p.Jitter)*4)),
 		stat("Потери", fmt.Sprintf("%.1f%%", p.LossPct), colorLoss(p.LossPct)),
 	)
 
@@ -168,16 +168,16 @@ func (m model) viewTrace() string {
 		}
 		host = truncate(host, hostW)
 
-		flag, lossStyle, avgStr, avgStyle := anomalyDecor(h)
+		d := anomalyDecor(h)
 		dimStyle := lipgloss.NewStyle().Foreground(cDim)
 		cells := []string{
-			cell(flag, colW(0), false, lipgloss.NewStyle().Foreground(cBad).Bold(true)),
+			cell(d.Flag, colW(0), false, lipgloss.NewStyle().Foreground(cBad).Bold(true)),
 			cell(fmt.Sprintf("%d", h.TTL), colW(1), true, dimStyle),
 			cell(host, colW(2), false, hc),
-			cell(fmt.Sprintf("%.0f%%", h.LossPct), colW(3), true, lossStyle),
+			cell(fmt.Sprintf("%.0f%%", h.LossPct), colW(3), true, d.LossStyle),
 			cell(fmt.Sprintf("%d", h.Sent), colW(4), true, dimStyle),
-			cell(rttCell(h.LastRTT), colW(5), true, lipgloss.NewStyle().Foreground(colorRTT(ms(h.LastRTT)))),
-			cell(avgStr, colW(6), true, avgStyle),
+			cell(rttCell(h.LastRTT), colW(5), true, lipgloss.NewStyle().Foreground(colorRTT(probe.Millis(h.LastRTT)))),
+			cell(d.AvgStr, colW(6), true, d.AvgStyle),
 			cell(rttCell(h.BestRTT), colW(7), true, dimStyle),
 			cell(rttCell(h.WorstRTT), colW(8), true, dimStyle),
 			cell(rttCell(h.StdDev), colW(9), true, dimStyle),
@@ -192,58 +192,44 @@ func (m model) viewTrace() string {
 // "локальная сеть" for private/loopback/link-local/CGNAT. Empty while the
 // lookup is still in flight, so the row simply doesn't show a suffix yet.
 func networkLabel(h probe.Hop) string {
-	if ip := net.ParseIP(h.IP); ip != nil && isLocalIP(ip) {
+	if ip := net.ParseIP(h.IP); ip != nil && probe.IsLocalIP(ip) {
 		return "локальная сеть"
 	}
 	if h.ASName != "" {
-		return shortenASName(h.ASName)
+		return probe.ShortenASName(h.ASName)
 	}
 	return ""
 }
 
-// shortenASName trims Team Cymru's verbose form to the leading token.
-// Example: "CLOUDFLARENET - Cloudflare, Inc., US" → "CLOUDFLARENET".
-func shortenASName(name string) string {
-	if i := strings.Index(name, " - "); i > 0 {
-		return name[:i]
-	}
-	if i := strings.Index(name, ","); i > 0 {
-		return name[:i]
-	}
-	return name
+// rowDecor bundles the per-row render decorations driven by a hop's
+// persistent-anomaly flags. A named struct beats a four-value tuple at the
+// call site — fields are self-describing and the function can grow without
+// breaking call sites positionally.
+type rowDecor struct {
+	Flag      string // "⚠" on flagged hops; "" otherwise
+	LossStyle lipgloss.Style
+	AvgStr    string // includes "+Δms" suffix when RTTPersists
+	AvgStyle  lipgloss.Style
 }
 
-// isLocalIP duplicates the predicate from internal/probe so the UI can format
-// private hops without importing the probe-internal helper.
-func isLocalIP(ip net.IP) bool {
-	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
-		ip.IsMulticast() || ip.IsUnspecified() {
-		return true
+// anomalyDecor builds the row decorations for one hop.
+func anomalyDecor(h probe.Hop) rowDecor {
+	d := rowDecor{
+		LossStyle: lipgloss.NewStyle().Foreground(colorLoss(h.LossPct)),
+		AvgStr:    rttCell(h.AvgRTT),
+		AvgStyle:  lipgloss.NewStyle().Foreground(colorRTT(probe.Millis(h.AvgRTT))),
 	}
-	ip4 := ip.To4()
-	return ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
-}
-
-// anomalyDecor turns a hop's *Persists/DeltaRTT flags into render decorations
-// for the trace row: a flag glyph, the styled loss cell, and the avg-RTT cell
-// (which may carry a "+ΔX" suffix on hops with persistent RTT rise).
-func anomalyDecor(h probe.Hop) (flag string, lossStyle lipgloss.Style, avgStr string, avgStyle lipgloss.Style) {
 	if h.LossPersists || h.RTTPersists {
-		flag = "⚠"
+		d.Flag = "⚠"
 	}
-
-	lossStyle = lipgloss.NewStyle().Foreground(colorLoss(h.LossPct))
 	if h.LossPersists {
-		lossStyle = lossStyle.Bold(true)
+		d.LossStyle = d.LossStyle.Bold(true)
 	}
-
-	avgStr = rttCell(h.AvgRTT)
-	avgStyle = lipgloss.NewStyle().Foreground(colorRTT(ms(h.AvgRTT)))
 	if h.RTTPersists && h.DeltaRTT > 0 {
-		avgStr = fmt.Sprintf("%s +%.0f", avgStr, ms(h.DeltaRTT))
-		avgStyle = avgStyle.Bold(true)
+		d.AvgStr = fmt.Sprintf("%s +%.0f", d.AvgStr, probe.Millis(h.DeltaRTT))
+		d.AvgStyle = d.AvgStyle.Bold(true)
 	}
-	return flag, lossStyle, avgStr, avgStyle
+	return d
 }
 
 // ---- Diagnosis tab ----
@@ -395,13 +381,11 @@ func speedLabel(s string) string {
 
 // ---- small helpers ----
 
-func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
-
 func rttCell(d time.Duration) string {
 	if d <= 0 {
 		return "—"
 	}
-	return fmt.Sprintf("%.1f", ms(d))
+	return fmt.Sprintf("%.1f", probe.Millis(d))
 }
 
 func cell(s string, w int, right bool, st lipgloss.Style) string {

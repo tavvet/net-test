@@ -125,8 +125,8 @@ func TestShortenASName(t *testing.T) {
 		"":                                     "",
 	}
 	for in, want := range cases {
-		if got := shortenASName(in); got != want {
-			t.Errorf("shortenASName(%q) = %q, want %q", in, got, want)
+		if got := probe.ShortenASName(in); got != want {
+			t.Errorf("probe.ShortenASName(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
