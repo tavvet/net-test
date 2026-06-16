@@ -40,6 +40,7 @@ type PingReport struct {
 // TraceReport is the per-hop route plus its per-segment diagnosis.
 type TraceReport struct {
 	Hops      []HopReport     `json:"hops,omitempty"`
+	Healthy   bool            `json:"healthy"` // false if any segment has a persistent issue
 	Diagnosis []SegmentReport `json:"diagnosis,omitempty"`
 	Err       string          `json:"error,omitempty"`
 }
@@ -152,7 +153,7 @@ func traceFrom(t probe.TraceSnapshot) *TraceReport {
 			Issue:    s.Issue,
 		}
 	}
-	return &TraceReport{Hops: hops, Diagnosis: segs, Err: t.Err}
+	return &TraceReport{Hops: hops, Healthy: t.Diagnosis.Healthy, Diagnosis: segs, Err: t.Err}
 }
 
 func hopFrom(h probe.Hop) HopReport {

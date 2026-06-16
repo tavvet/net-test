@@ -99,12 +99,15 @@ func (m model) viewPing() string {
 
 // ---- Route (mtr) tab ----
 
+// traceFlagW is the width of the per-row anomaly gutter (the "⚠" marker). It's
+// a row decoration, not a data column, so it lives outside traceCols.
+const traceFlagW = 2
+
 var traceCols = []struct {
 	name  string
 	w     int
 	right bool
 }{
-	{"", 2, false}, // anomaly flag: "⚠" or blank
 	{"#", 3, true},
 	{"Хост / IP", 0, false}, // flex
 	{"Потери", 8, true},
@@ -130,7 +133,8 @@ func (m model) viewTrace() string {
 		fixed += c.w
 	}
 	gaps := len(traceCols) // one space between/after columns
-	hostW := max(m.w-fixed-gaps, 10)
+	// the flag gutter (+ its trailing space) sits to the left of every row
+	hostW := max(m.w-fixed-gaps-traceFlagW-1, 10)
 
 	colW := func(i int) int {
 		if traceCols[i].w == 0 {
@@ -139,8 +143,12 @@ func (m model) viewTrace() string {
 		return traceCols[i].w
 	}
 
-	// header
-	var head []string
+	gutter := func(flag string) string {
+		return lipgloss.NewStyle().Foreground(cBad).Bold(true).Width(traceFlagW).Render(flag)
+	}
+
+	// header — blank gutter, then the data columns
+	head := []string{gutter("")}
 	for i, c := range traceCols {
 		head = append(head, cell(c.name, colW(i), c.right, headStyle))
 	}
@@ -171,16 +179,16 @@ func (m model) viewTrace() string {
 		d := anomalyDecor(h)
 		dimStyle := lipgloss.NewStyle().Foreground(cDim)
 		cells := []string{
-			cell(d.Flag, colW(0), false, lipgloss.NewStyle().Foreground(cBad).Bold(true)),
-			cell(fmt.Sprintf("%d", h.TTL), colW(1), true, dimStyle),
-			cell(host, colW(2), false, hc),
-			cell(fmt.Sprintf("%.0f%%", h.LossPct), colW(3), true, d.LossStyle),
-			cell(fmt.Sprintf("%d", h.Sent), colW(4), true, dimStyle),
-			cell(rttCell(h.LastRTT), colW(5), true, lipgloss.NewStyle().Foreground(colorRTT(probe.Millis(h.LastRTT)))),
-			cell(d.AvgStr, colW(6), true, d.AvgStyle),
-			cell(rttCell(h.BestRTT), colW(7), true, dimStyle),
-			cell(rttCell(h.WorstRTT), colW(8), true, dimStyle),
-			cell(rttCell(h.StdDev), colW(9), true, dimStyle),
+			gutter(d.Flag),
+			cell(fmt.Sprintf("%d", h.TTL), colW(0), true, dimStyle),
+			cell(host, colW(1), false, hc),
+			cell(fmt.Sprintf("%.0f%%", h.LossPct), colW(2), true, d.LossStyle),
+			cell(fmt.Sprintf("%d", h.Sent), colW(3), true, dimStyle),
+			cell(rttCell(h.LastRTT), colW(4), true, lipgloss.NewStyle().Foreground(colorRTT(probe.Millis(h.LastRTT)))),
+			cell(d.AvgStr, colW(5), true, d.AvgStyle),
+			cell(rttCell(h.BestRTT), colW(6), true, dimStyle),
+			cell(rttCell(h.WorstRTT), colW(7), true, dimStyle),
+			cell(rttCell(h.StdDev), colW(8), true, dimStyle),
 		}
 		rows = append(rows, strings.Join(cells, " "))
 	}
@@ -286,17 +294,14 @@ func hopRange(s probe.Segment) string {
 	return fmt.Sprintf("хопы %d-%d", s.HopFrom, s.HopTo)
 }
 
-// overallVerdict summarises the segments into one line: which segment first
-// went bad, or that everything is fine.
+// overallVerdict summarises the diagnosis into one line, reading the
+// pre-computed Healthy/FirstIssue fields rather than re-walking the segments.
 func overallVerdict(d probe.Diagnosis) string {
-	for _, s := range d.Segments {
-		if !s.Healthy {
-			return labelStyle.Render("Состояние: ") +
-				lipgloss.NewStyle().Bold(true).Foreground(cBad).Render("проблема в зоне «"+s.Label+"»")
-		}
+	prefix := labelStyle.Render("Состояние: ")
+	if d.Healthy {
+		return prefix + lipgloss.NewStyle().Bold(true).Foreground(cGood).Render("маршрут здоров")
 	}
-	return labelStyle.Render("Состояние: ") +
-		lipgloss.NewStyle().Bold(true).Foreground(cGood).Render("маршрут здоров")
+	return prefix + lipgloss.NewStyle().Bold(true).Foreground(cBad).Render("проблема в зоне «"+d.FirstIssue+"»")
 }
 
 // ---- Speed tab ----
