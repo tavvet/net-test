@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -164,6 +165,9 @@ func (m model) viewTrace() string {
 			if h.Host != "" {
 				host = fmt.Sprintf("%s (%s)", h.Host, h.IP)
 			}
+			if suffix := networkLabel(h); suffix != "" {
+				host = fmt.Sprintf("%s · %s", host, suffix)
+			}
 		}
 		host = truncate(host, hostW)
 
@@ -184,6 +188,43 @@ func (m model) viewTrace() string {
 		rows = append(rows, strings.Join(cells, " "))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// networkLabel returns a short label for the network the hop belongs to: an
+// AS name for public IPs (when the Team Cymru lookup has returned), or
+// "локальная сеть" for private/loopback/link-local/CGNAT. Empty while the
+// lookup is still in flight, so the row simply doesn't show a suffix yet.
+func networkLabel(h probe.Hop) string {
+	if ip := net.ParseIP(h.IP); ip != nil && isLocalIP(ip) {
+		return "локальная сеть"
+	}
+	if h.ASName != "" {
+		return shortenASName(h.ASName)
+	}
+	return ""
+}
+
+// shortenASName trims Team Cymru's verbose form to the leading token.
+// Example: "CLOUDFLARENET - Cloudflare, Inc., US" → "CLOUDFLARENET".
+func shortenASName(name string) string {
+	if i := strings.Index(name, " - "); i > 0 {
+		return name[:i]
+	}
+	if i := strings.Index(name, ","); i > 0 {
+		return name[:i]
+	}
+	return name
+}
+
+// isLocalIP duplicates the predicate from internal/probe so the UI can format
+// private hops without importing the probe-internal helper.
+func isLocalIP(ip net.IP) bool {
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() ||
+		ip.IsMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	ip4 := ip.To4()
+	return ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
 }
 
 // anomalyDecor turns a hop's *Persists/DeltaRTT flags into render decorations
