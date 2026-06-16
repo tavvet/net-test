@@ -90,6 +90,42 @@ func TestBuild_OmitsUnfinishedSpeed(t *testing.T) {
 	}
 }
 
+func TestBuild_SurfacesProbeErrors(t *testing.T) {
+	// Probe-layer failures must appear in the report, not silently drop the
+	// whole section — otherwise a broken --once --json looks "all OK".
+	pingErr := &probe.PingStats{Err: "icmp socket: permission denied"}
+	traceErr := &probe.TraceSnapshot{Err: "open prober: too many open files"}
+	speedErr := &probe.SpeedProgress{Phase: probe.PhaseError, Err: "cloudflare unreachable"}
+
+	r := Build(sampleOpts(), pingErr, traceErr, speedErr)
+	if r.Ping == nil || r.Ping.Err != pingErr.Err {
+		t.Errorf("ping err not surfaced: %+v", r.Ping)
+	}
+	if r.Trace == nil || r.Trace.Err != traceErr.Err {
+		t.Errorf("trace err not surfaced: %+v", r.Trace)
+	}
+	if r.Speed == nil || r.Speed.Err != speedErr.Err {
+		t.Errorf("speed err not surfaced: %+v", r.Speed)
+	}
+}
+
+func TestWriteJSON_SilentHopOmitsZeroCounters(t *testing.T) {
+	// A hop with no replies yet should NOT emit "sent":0/"recv":0/"loss_pct":0
+	// — otherwise every silent hop bloats JSON with zeros.
+	silent := probe.Hop{TTL: 3, IP: ""}
+	r := Build(sampleOpts(), nil, &probe.TraceSnapshot{Target: "x", Hops: []probe.Hop{silent}}, nil)
+	var buf bytes.Buffer
+	if err := WriteJSON(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, banned := range []string{`"sent": 0`, `"recv": 0`, `"loss_pct": 0`} {
+		if strings.Contains(out, banned) {
+			t.Errorf("silent hop emitted %q; expected omitempty to elide it.\n%s", banned, out)
+		}
+	}
+}
+
 func TestWriteJSON_StableSchema(t *testing.T) {
 	r := Build(sampleOpts(), samplePing(), sampleTrace(), sampleSpeed())
 	var buf bytes.Buffer
@@ -115,9 +151,12 @@ func TestWriteJSON_StableSchema(t *testing.T) {
 		}
 	}
 	hop0 := trace["hops"].([]any)[0].(map[string]any)
-	for _, key := range []string{"ttl", "ip", "sent", "recv", "loss_pct"} {
+	// Only ttl is always required; sent/recv/loss_pct are omitempty (silent
+	// hops elide them) but must appear on a probed hop. The sample's first
+	// hop has 10 sent, so we check those there.
+	for _, key := range []string{"ttl", "ip", "sent", "recv"} {
 		if _, ok := hop0[key]; !ok {
-			t.Errorf("missing hop.%s", key)
+			t.Errorf("missing hop.%s on probed hop", key)
 		}
 	}
 }

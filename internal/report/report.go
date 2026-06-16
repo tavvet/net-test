@@ -34,12 +34,14 @@ type PingReport struct {
 	BestMs   float64 `json:"best_ms"`
 	WorstMs  float64 `json:"worst_ms"`
 	JitterMs float64 `json:"jitter_ms"`
+	Err      string  `json:"error,omitempty"` // probe-side failure (e.g. ICMP socket open)
 }
 
 // TraceReport is the per-hop route plus its per-segment diagnosis.
 type TraceReport struct {
-	Hops      []HopReport     `json:"hops"`
+	Hops      []HopReport     `json:"hops,omitempty"`
 	Diagnosis []SegmentReport `json:"diagnosis,omitempty"`
+	Err       string          `json:"error,omitempty"`
 }
 
 // HopReport is one row of the route table. Fields that are typically zero on
@@ -48,9 +50,9 @@ type HopReport struct {
 	TTL          int     `json:"ttl"`
 	IP           string  `json:"ip,omitempty"`
 	Host         string  `json:"host,omitempty"`
-	Sent         int     `json:"sent"`
-	Recv         int     `json:"recv"`
-	LossPct      float64 `json:"loss_pct"`
+	Sent         int     `json:"sent,omitempty"`
+	Recv         int     `json:"recv,omitempty"`
+	LossPct      float64 `json:"loss_pct,omitempty"`
 	AvgMs        float64 `json:"avg_ms,omitempty"`
 	BestMs       float64 `json:"best_ms,omitempty"`
 	WorstMs      float64 `json:"worst_ms,omitempty"`
@@ -81,6 +83,7 @@ type SpeedReport struct {
 	JitterMs     float64 `json:"jitter_ms"`
 	DownloadMbps float64 `json:"download_mbps"`
 	UploadMbps   float64 `json:"upload_mbps"`
+	Err          string  `json:"error,omitempty"`
 }
 
 // Options bundles the inputs that the headless caller has but the wire layer
@@ -104,13 +107,16 @@ func Build(opts Options, ping *probe.PingStats, trace *probe.TraceSnapshot, spee
 		IP:          opts.IP,
 		DurationMs:  opts.Duration.Milliseconds(),
 	}
-	if ping != nil && ping.Sent > 0 {
+	// Each section is emitted if it has DATA or a probe-side ERROR. Silently
+	// dropping a failed phase would let a broken `--once --json` look "all OK"
+	// to a cron job; the error is now visible in the output.
+	if ping != nil && (ping.Sent > 0 || ping.Err != "") {
 		r.Ping = pingFrom(*ping)
 	}
-	if trace != nil && len(trace.Hops) > 0 {
+	if trace != nil && (len(trace.Hops) > 0 || trace.Err != "") {
 		r.Trace = traceFrom(*trace)
 	}
-	if speed != nil && speed.Phase == probe.PhaseDone {
+	if speed != nil && (speed.Phase == probe.PhaseDone || speed.Phase == probe.PhaseError) {
 		r.Speed = speedFrom(*speed)
 	}
 	return r
@@ -125,6 +131,7 @@ func pingFrom(p probe.PingStats) *PingReport {
 		BestMs:   durMs(p.BestRTT),
 		WorstMs:  durMs(p.WorstRTT),
 		JitterMs: durMs(p.Jitter),
+		Err:      p.Err,
 	}
 }
 
@@ -145,7 +152,7 @@ func traceFrom(t probe.TraceSnapshot) *TraceReport {
 			Issue:    s.Issue,
 		}
 	}
-	return &TraceReport{Hops: hops, Diagnosis: segs}
+	return &TraceReport{Hops: hops, Diagnosis: segs, Err: t.Err}
 }
 
 func hopFrom(h probe.Hop) HopReport {
@@ -176,6 +183,7 @@ func speedFrom(s probe.SpeedProgress) *SpeedReport {
 		JitterMs:     round1(s.JitterMs),
 		DownloadMbps: round1(s.DownloadMbps),
 		UploadMbps:   round1(s.UploadMbps),
+		Err:          s.Err,
 	}
 }
 
