@@ -17,11 +17,12 @@ type tab int
 const (
 	tabPing tab = iota
 	tabTrace
+	tabDiagnosis
 	tabSpeed
 	tabCount
 )
 
-var tabNames = []string{"Пинг", "Маршрут", "Скорость"}
+var tabNames = []string{"Пинг", "Маршрут", "Диагноз", "Скорость"}
 
 // Channels carries the live data streams from the probe layer into the UI.
 type Channels struct {
@@ -143,6 +144,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "2":
 		m.tab = tabTrace
 	case "3":
+		m.tab = tabDiagnosis
+	case "4":
 		m.tab = tabSpeed
 	case "s", "enter":
 		if !m.speedRun {
