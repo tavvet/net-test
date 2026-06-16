@@ -217,7 +217,9 @@ func measureStreams(ctx context.Context, out chan<- SpeedProgress, res *SpeedPro
 	}
 
 	done := make(chan struct{})
+	tickerDone := make(chan struct{})
 	go func() {
+		defer close(tickerDone)
 		tick := time.NewTicker(250 * time.Millisecond)
 		defer tick.Stop()
 		for {
@@ -229,15 +231,20 @@ func measureStreams(ctx context.Context, out chan<- SpeedProgress, res *SpeedPro
 				if elapsed <= 0 {
 					continue
 				}
-				res.Mbps = float64(atomic.LoadInt64(&total)) * 8 / elapsed / 1e6
-				res.Percent = math.Min(1, elapsed/window.Seconds())
-				emit(ctx, out, *res)
+				// Emit a local copy: don't mutate *res from here. The finaliser
+				// below also writes res.Mbps/res.Percent; with two writers we
+				// need full happens-before, which is what tickerDone provides.
+				snap := *res
+				snap.Mbps = float64(atomic.LoadInt64(&total)) * 8 / elapsed / 1e6
+				snap.Percent = math.Min(1, elapsed/window.Seconds())
+				emit(ctx, out, snap)
 			}
 		}
 	}()
 
 	wg.Wait()
 	close(done)
+	<-tickerDone // wait for ticker to fully exit before mutating *res
 	elapsed := time.Since(start).Seconds()
 	if elapsed <= 0 {
 		return 0

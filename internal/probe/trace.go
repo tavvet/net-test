@@ -53,8 +53,6 @@ type Tracer struct {
 	maxHops  int
 	interval time.Duration
 	timeout  time.Duration // read window per cycle
-	dns      *dnsCache
-	asn      *asnCache
 }
 
 // NewTracer builds a Tracer for an already-resolved target.
@@ -65,8 +63,6 @@ func NewTracer(ip net.IP, label string, maxHops int, interval, timeout time.Dura
 		maxHops:  maxHops,
 		interval: interval,
 		timeout:  timeout,
-		dns:      newDNSCache(),
-		asn:      newASNCache(),
 	}
 }
 
@@ -85,6 +81,12 @@ func (tr *Tracer) Run(ctx context.Context, out chan<- TraceSnapshot) {
 		return
 	}
 	defer pool.close()
+
+	// Caches are scoped to this run so their background resolves inherit ctx;
+	// cancelling ctx aborts in-flight DNS/ASN lookups instead of letting them
+	// run to their own 2-3s timeout.
+	dns := newDNSCache(ctx)
+	asn := newASNCache(ctx)
 
 	accs := make([]hopAcc, tr.maxHops+1) // 1-indexed by TTL
 	upTo := tr.maxHops                   // probe TTL 1..upTo; shrinks once target found
@@ -142,8 +144,8 @@ func (tr *Tracer) Run(ctx context.Context, out chan<- TraceSnapshot) {
 				h.StdDev = time.Duration(math.Sqrt(variance) * float64(time.Millisecond))
 			}
 			if a.ip != "" {
-				h.Host = tr.dns.lookup(a.ip)
-				info := tr.asn.lookup(a.ip)
+				h.Host = dns.lookup(a.ip)
+				info := asn.lookup(a.ip)
 				h.ASN, h.ASName = info.num, info.name
 			}
 			hops = append(hops, h)
@@ -229,14 +231,22 @@ func (p *proberPool) sweep(dst net.IP, upTo, cycle int, timeout time.Duration) [
 }
 
 // dnsCache resolves hop IPs to names in the background so probing never blocks.
+// The parent ctx is the Tracer's run context — when it's cancelled, pending
+// resolves abort instead of running to their own 2s timeout (which leaks
+// goroutines on rapid restarts).
 type dnsCache struct {
-	mu    sync.Mutex
-	names map[string]string
-	pend  map[string]struct{}
+	mu     sync.Mutex
+	names  map[string]string
+	pend   map[string]struct{}
+	parent context.Context
 }
 
-func newDNSCache() *dnsCache {
-	return &dnsCache{names: map[string]string{}, pend: map[string]struct{}{}}
+func newDNSCache(parent context.Context) *dnsCache {
+	return &dnsCache{
+		names:  map[string]string{},
+		pend:   map[string]struct{}{},
+		parent: parent,
+	}
 }
 
 // lookup returns the cached name for ip, kicking off async resolution on first miss.
@@ -254,7 +264,7 @@ func (d *dnsCache) lookup(ip string) string {
 }
 
 func (d *dnsCache) resolve(ip string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(d.parent, 2*time.Second)
 	defer cancel()
 	name := ""
 	if names, err := net.DefaultResolver.LookupAddr(ctx, ip); err == nil && len(names) > 0 {
@@ -262,5 +272,6 @@ func (d *dnsCache) resolve(ip string) {
 	}
 	d.mu.Lock()
 	d.names[ip] = name
+	delete(d.pend, ip) // mirrors asnCache.resolve — otherwise pend grows monotonically
 	d.mu.Unlock()
 }

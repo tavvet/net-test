@@ -25,17 +25,21 @@ type asnInfo struct {
 }
 
 // asnCache resolves IPs to AS metadata lazily and remembers the result.
-// Concurrent lookups for the same IP are deduplicated.
+// Concurrent lookups for the same IP are deduplicated. The parent ctx is the
+// Tracer's run context — cancellation aborts in-flight Cymru lookups instead
+// of running to their own timeout.
 type asnCache struct {
 	mu      sync.Mutex
 	results map[string]asnInfo
 	pending map[string]struct{}
+	parent  context.Context
 }
 
-func newASNCache() *asnCache {
+func newASNCache(parent context.Context) *asnCache {
 	return &asnCache{
 		results: map[string]asnInfo{},
 		pending: map[string]struct{}{},
+		parent:  parent,
 	}
 }
 
@@ -64,7 +68,7 @@ func (c *asnCache) lookup(ip string) asnInfo {
 // resolve performs the two TXT lookups and stores the result. Errors and empty
 // answers are stored as empty info so we don't keep retrying a dead IP.
 func (c *asnCache) resolve(ip string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(c.parent, 3*time.Second)
 	defer cancel()
 
 	info := asnInfo{}

@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"net"
 	"os"
 	"strings"
@@ -64,7 +65,7 @@ func TestIsLocalIP(t *testing.T) {
 func TestASNCache_PrivateIPSkipped(t *testing.T) {
 	// Private IPs must be cached as empty without a DNS query. We can verify
 	// this just by checking the cache state — no need to mock the resolver.
-	c := newASNCache()
+	c := newASNCache(context.Background())
 	got := c.lookup("10.0.1.1")
 	if got.num != "" || got.name != "" {
 		t.Errorf("private IP returned %+v, want empty", got)
@@ -85,7 +86,7 @@ func TestASNCache_PrivateIPSkipped(t *testing.T) {
 func TestASNCache_RepeatedLookupsDeduplicated(t *testing.T) {
 	// A second lookup for an IP whose first lookup is still pending must
 	// return the cached empty value without enqueuing a new goroutine.
-	c := newASNCache()
+	c := newASNCache(context.Background())
 	// Manually mark "1.2.3.4" as pending to simulate an in-flight resolve.
 	c.mu.Lock()
 	c.pending["1.2.3.4"] = struct{}{}
@@ -106,7 +107,7 @@ func TestASNCache_RepeatedLookupsDeduplicated(t *testing.T) {
 func TestASNCache_ConcurrentLookupsRaceFree(t *testing.T) {
 	// Hit the cache from many goroutines at once: private IPs only, so no
 	// real DNS happens. With -race this would catch any unprotected map access.
-	c := newASNCache()
+	c := newASNCache(context.Background())
 	var wg sync.WaitGroup
 	for range 64 {
 		wg.Go(func() {
@@ -124,7 +125,7 @@ func TestASNCache_LiveLookup(t *testing.T) {
 	if os.Getenv("NETTEST_LIVE") == "" {
 		t.Skip("set NETTEST_LIVE=1 to run the live network test")
 	}
-	c := newASNCache()
+	c := newASNCache(context.Background())
 	c.lookup("1.1.1.1") // triggers background resolve
 	deadline := time.Now().Add(5 * time.Second)
 	var info asnInfo
