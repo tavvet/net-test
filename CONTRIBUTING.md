@@ -35,10 +35,16 @@ make vet           # go vet ./...
   добавляйте `runtime.GOOS`-ветвления в общий код — см.
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Сетевой слой и UI
+## Слои
 
-`internal/probe` не должен импортировать `internal/ui` или знать про терминал.
-Он только производит снапшоты в каналы. Любая логика отображения — в `internal/ui`.
+- `internal/probe` не импортирует `internal/ui` и не знает про терминал. Здесь
+  живут и измерения, и аналитика (аномалии, диагноз, ASN) — наружу отдаются
+  готовые поля в снапшотах через каналы.
+- `internal/ui` — только отображение готовых снапшотов.
+- `internal/report` — отдельный wire-формат для `--once`/`--json`; меняйте его
+  JSON-теги осознанно, это публичный контракт.
+
+См. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Коммиты и PR
 
@@ -59,5 +65,4 @@ make vet           # go vet ./...
 
 ## Идеи на будущее
 
-IPv6 (ICMPv6), экспорт логов/CSV для долгого мониторинга, порог-алерты,
-`gomobile`-адаптер + нативный Android UI. PR welcome.
+Список в бэклоге — [docs/ROADMAP.md](docs/ROADMAP.md). PR welcome.
