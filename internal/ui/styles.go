@@ -122,51 +122,14 @@ func bar(frac float64, width int, color lipgloss.Color) string {
 	return full + empty
 }
 
-// quality is a link-quality severity level, from best to worst.
-type quality int
-
-const (
-	qPerfect quality = iota
-	qGood
-	qBad
-	qCritical
-)
-
-// lossQuality classifies packet loss into a severity level.
-func lossQuality(pct float64) quality {
-	switch {
-	case pct > 5:
-		return qCritical
-	case pct > 1:
-		return qBad
-	case pct > 0:
-		return qGood
-	default:
-		return qPerfect
-	}
-}
-
-// jitterQuality classifies jitter (ms) into a severity level.
-func jitterQuality(ms float64) quality {
-	switch {
-	case ms > 50:
-		return qCritical
-	case ms > 20:
-		return qBad
-	case ms > 8:
-		return qGood
-	default:
-		return qPerfect
-	}
-}
-
-func (q quality) labelColor() (string, lipgloss.Color) {
+// labelColor maps a probe quality level to its Russian label and palette colour.
+func labelColor(q probe.QualityLevel) (string, lipgloss.Color) {
 	switch q {
-	case qCritical:
+	case probe.QualityCritical:
 		return "Критично", cBad
-	case qBad:
+	case probe.QualityBad:
 		return "Плохо", cWarn
-	case qGood:
+	case probe.QualityGood:
 		return "Хорошо", cOK
 	default:
 		return "Отлично", cGood
@@ -191,19 +154,14 @@ func verdictText(p probe.PingStats) string {
 	return out
 }
 
-// verdict combines per-factor severities into an overall quality label, a color,
-// and a short reason naming the dominant factor (empty when quality is perfect).
-// It intentionally ignores absolute RTT — a stable link to a distant host is
-// fine — and judges only on loss and jitter.
+// verdict turns a loss%/jitter pair into an overall quality label, colour, and a
+// short reason naming the dominant factor (empty when perfect). The severity
+// thresholds live in probe.Quality so the TUI and the mobile GUI agree.
 func verdict(lossPct, jitterMs float64) (label, reason string, color lipgloss.Color) {
-	lq, jq := lossQuality(lossPct), jitterQuality(jitterMs)
-	worst := lq
-	if jq > worst {
-		worst = jq
-	}
-	label, color = worst.labelColor()
-	if worst > qPerfect {
-		if lq >= jq {
+	level, lossDominates := probe.Quality(lossPct, jitterMs)
+	label, color = labelColor(level)
+	if level > probe.QualityPerfect {
+		if lossDominates {
 			reason = fmt.Sprintf("потери %.1f%%", lossPct)
 		} else {
 			reason = fmt.Sprintf("джиттер %.0f ms", jitterMs)
