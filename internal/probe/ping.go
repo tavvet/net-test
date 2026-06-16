@@ -170,21 +170,25 @@ func windowStats(hist []float64, maxWin int) (size int, lossPct float64, jitter 
 	}
 	size = len(window)
 
-	var rtts []float64
+	// Single pass: count replies, accumulate jitter sum between successive
+	// RTTs (skipping lost probes). No intermediate slice allocation per cycle.
+	var recv, pairs int
+	var prev, sum float64
+	havePrev := false
 	for _, v := range window {
-		if v > 0 {
-			rtts = append(rtts, v)
+		if v <= 0 {
+			continue // lost probe — doesn't reset the previous-RTT anchor
 		}
+		recv++
+		if havePrev {
+			sum += math.Abs(v - prev)
+			pairs++
+		}
+		prev, havePrev = v, true
 	}
-	lossPct = float64(size-len(rtts)) / float64(size) * 100
-
-	if len(rtts) >= 2 {
-		var sum float64
-		for i := 1; i < len(rtts); i++ {
-			sum += math.Abs(rtts[i] - rtts[i-1])
-		}
-		mean := sum / float64(len(rtts)-1)
-		jitter = time.Duration(mean * float64(time.Millisecond))
+	lossPct = float64(size-recv) / float64(size) * 100
+	if pairs > 0 {
+		jitter = time.Duration(sum / float64(pairs) * float64(time.Millisecond))
 	}
 	return size, lossPct, jitter
 }

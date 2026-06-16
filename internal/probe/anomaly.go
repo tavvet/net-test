@@ -74,7 +74,7 @@ func markAnomalies(hops []Hop) {
 		}
 
 		// RTTPersists: large hop-to-hop jump AND no recovery on later hops.
-		if msVal(h.DeltaRTT) > anomalyRTTDeltaMs && i+1 < n {
+		if Millis(h.DeltaRTT) > anomalyRTTDeltaMs && i+1 < n {
 			myAvg := rttMs(*h)
 			if tailMinRTT[i+1] >= myAvg-anomalyRTTTolMs {
 				h.RTTPersists = true
@@ -89,7 +89,5 @@ func rttMs(h Hop) float64 {
 	if h.Recv == 0 || h.AvgRTT == 0 {
 		return math.Inf(1)
 	}
-	return msVal(h.AvgRTT)
+	return Millis(h.AvgRTT)
 }
-
-func msVal(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }

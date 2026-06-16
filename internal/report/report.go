@@ -188,12 +188,9 @@ func speedFrom(s probe.SpeedProgress) *SpeedReport {
 }
 
 // durMs converts a duration to milliseconds rounded to one decimal place.
-func durMs(d time.Duration) float64 {
-	if d <= 0 {
-		return 0
-	}
-	return round1(float64(d) / float64(time.Millisecond))
-}
+// Thin wrapper over probe.Millis so the JSON layer owns its own rounding
+// policy without duplicating the underlying conversion.
+func durMs(d time.Duration) float64 { return round1(probe.Millis(d)) }
 
 func round1(x float64) float64 {
 	return float64(int64(x*10+0.5)) / 10

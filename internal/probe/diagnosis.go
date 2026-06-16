@@ -3,7 +3,6 @@ package probe
 import (
 	"fmt"
 	"net"
-	"strings"
 )
 
 // SegmentKind classifies a contiguous group of hops by its role in the path.
@@ -157,7 +156,7 @@ func segmentLabel(kind SegmentKind, hopIdx []int, hops []Hop) string {
 	var who string
 	switch {
 	case asName != "":
-		who = shortenASNameLocal(asName)
+		who = ShortenASName(asName)
 	case asn != "":
 		who = asn
 	default:
@@ -182,7 +181,7 @@ func segmentHealth(hopIdx []int, hops []Hop) (healthy bool, issue string) {
 			return false, fmt.Sprintf("потери %.0f%% начиная с хопа %d", h.LossPct, h.TTL)
 		}
 		if h.RTTPersists && h.DeltaRTT > 0 {
-			return false, fmt.Sprintf("скачок задержки +%.0f ms на хопе %d", msVal(h.DeltaRTT), h.TTL)
+			return false, fmt.Sprintf("скачок задержки +%.0f ms на хопе %d", Millis(h.DeltaRTT), h.TTL)
 		}
 	}
 	return true, ""
@@ -195,16 +194,4 @@ func firstASN(hopIdx []int, hops []Hop) (asn, name string) {
 		}
 	}
 	return "", ""
-}
-
-// shortenASNameLocal trims Team Cymru's verbose form to the leading token.
-// Duplicated from the UI helper to keep internal/probe free of UI imports.
-func shortenASNameLocal(name string) string {
-	if i := strings.Index(name, " - "); i > 0 {
-		return name[:i]
-	}
-	if i := strings.Index(name, ","); i > 0 {
-		return name[:i]
-	}
-	return name
 }
