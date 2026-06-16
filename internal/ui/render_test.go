@@ -22,6 +22,10 @@ func sampleModel() model {
 		BestRTT: 10 * time.Millisecond, WorstRTT: 40 * time.Millisecond,
 		Jitter:  2 * time.Millisecond,
 		History: []float64{12, 14, 0, 16, 18, 13, 200, 14},
+		// Rolling-window: enough samples for a verdict; 5% loss → "Плохо".
+		WindowSize:    20,
+		WindowLossPct: 5,
+		WindowJitter:  2 * time.Millisecond,
 	}
 	m.haveTrace = true
 	m.trace = probe.TraceSnapshot{
@@ -74,6 +78,23 @@ func TestViewPingContent(t *testing.T) {
 	for _, want := range []string{"Качество", "RTT", "Потери"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("ping view missing %q", want)
+		}
+	}
+}
+
+func TestViewPingCollectingWhenWindowTooSmall(t *testing.T) {
+	m := sampleModel()
+	m.ping.WindowSize = 3
+	m.ping.WindowLossPct = 33
+	m.tab = tabPing
+	out := m.View()
+	if !strings.Contains(out, "Собираю данные") {
+		t.Errorf("expected collecting placeholder for small window; got: %s", out)
+	}
+	// Even with high WindowLossPct, the user must NOT see "Плохо/Критично" yet.
+	for _, bad := range []string{"Плохо", "Критично", "Хорошо"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("verdict %q leaked while window is below MinVerdictSamples", bad)
 		}
 	}
 }
