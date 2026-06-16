@@ -14,7 +14,7 @@ import (
 // sampleModel builds a model with representative data for render smoke tests.
 func sampleModel() model {
 	m := New(context.TODO(), "1.1.1.1", "1.1.1.1", Channels{}, time.Now()).(model)
-	m.w, m.h = 100, 30
+	m.w, m.h = 140, 30
 	m.havePing = true
 	m.ping = probe.PingStats{
 		Target: "1.1.1.1", IP: "1.1.1.1", Sent: 20, Recv: 19, LossPct: 5,
@@ -27,13 +27,13 @@ func sampleModel() model {
 	m.trace = probe.TraceSnapshot{
 		Target: "1.1.1.1", IP: "1.1.1.1",
 		Hops: []probe.Hop{
-			{TTL: 1, IP: "10.0.1.1", Host: "router.lan", Sent: 10, Recv: 10, LastRTT: 1 * time.Millisecond, AvgRTT: 1 * time.Millisecond},
+			{TTL: 1, IP: "10.0.1.1", Host: "router.lan", Sent: 10, Recv: 10, LastRTT: 1 * time.Millisecond, AvgRTT: 1 * time.Millisecond}, // private → "локальная сеть"
 			// hop 2: 20% loss, but later hops clean → transient, must NOT show flag
-			{TTL: 2, IP: "5.180.172.2", Sent: 10, Recv: 8, LossPct: 20, LastRTT: 12 * time.Millisecond, AvgRTT: 12 * time.Millisecond},
-			{TTL: 3, IP: "212.237.216.242", Sent: 10, Recv: 10, LastRTT: 14 * time.Millisecond, AvgRTT: 14 * time.Millisecond},
+			{TTL: 2, IP: "5.180.172.2", Sent: 10, Recv: 8, LossPct: 20, LastRTT: 12 * time.Millisecond, AvgRTT: 12 * time.Millisecond, ASN: "AS57043", ASName: "ITNET-AS, NL"},
+			{TTL: 3, IP: "212.237.216.242", Sent: 10, Recv: 10, LastRTT: 14 * time.Millisecond, AvgRTT: 14 * time.Millisecond, ASN: "AS5390"},
 			// hop 4: persistent loss + RTT rise → MUST show flag and Δ
-			{TTL: 4, IP: "162.158.236.14", Sent: 10, Recv: 8, LossPct: 20, LastRTT: 50 * time.Millisecond, AvgRTT: 50 * time.Millisecond, WorstRTT: 190 * time.Millisecond, StdDev: 38 * time.Millisecond, DeltaRTT: 36 * time.Millisecond, LossPersists: true, RTTPersists: true},
-			{TTL: 5, IP: "1.1.1.1", Host: "one.one.one.one", Sent: 10, Recv: 8, LossPct: 20, LastRTT: 52 * time.Millisecond, AvgRTT: 52 * time.Millisecond, StdDev: 9 * time.Millisecond, LossPersists: true},
+			{TTL: 4, IP: "162.158.236.14", Sent: 10, Recv: 8, LossPct: 20, LastRTT: 50 * time.Millisecond, AvgRTT: 50 * time.Millisecond, WorstRTT: 190 * time.Millisecond, StdDev: 38 * time.Millisecond, DeltaRTT: 36 * time.Millisecond, LossPersists: true, RTTPersists: true, ASN: "AS13335", ASName: "CLOUDFLARENET - Cloudflare, Inc., US"},
+			{TTL: 5, IP: "1.1.1.1", Host: "one.one.one.one", Sent: 10, Recv: 8, LossPct: 20, LastRTT: 52 * time.Millisecond, AvgRTT: 52 * time.Millisecond, StdDev: 9 * time.Millisecond, LossPersists: true, ASN: "AS13335", ASName: "CLOUDFLARENET - Cloudflare, Inc., US"},
 		},
 	}
 	m.speed = probe.SpeedProgress{
@@ -69,10 +69,30 @@ func TestViewTraceContent(t *testing.T) {
 	m := sampleModel()
 	m.tab = tabTrace
 	out := m.View()
-	// "⚠" must appear (persistent anomaly on hop 4) and "+36" — the Δ suffix.
-	for _, want := range []string{"Хост", "10.0.1.1", "1.1.1.1", "⚠", "+36"} {
+	// "⚠" + "+36": persistent anomaly with Δ suffix.
+	// "локальная сеть": private hop labelled.
+	// "CLOUDFLARENET": AS name shortened (full form has " - Cloudflare, …").
+	for _, want := range []string{"Хост", "10.0.1.1", "1.1.1.1", "⚠", "+36", "локальная сеть", "CLOUDFLARENET"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("trace view missing %q", want)
+		}
+	}
+	// The full Cymru form must NOT leak — shortenASName should trim it.
+	if strings.Contains(out, "Cloudflare, Inc.") {
+		t.Errorf("AS name not shortened — full Cymru form appears in output")
+	}
+}
+
+func TestShortenASName(t *testing.T) {
+	cases := map[string]string{
+		"CLOUDFLARENET - Cloudflare, Inc., US": "CLOUDFLARENET",
+		"GOOGLE, US":                           "GOOGLE",
+		"PLAIN":                                "PLAIN",
+		"":                                     "",
+	}
+	for in, want := range cases {
+		if got := shortenASName(in); got != want {
+			t.Errorf("shortenASName(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

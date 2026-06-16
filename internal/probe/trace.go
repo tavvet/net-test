@@ -29,6 +29,11 @@ type Hop struct {
 	DeltaRTT     time.Duration // AvgRTT − AvgRTT of previous hop; 0 if undefined
 	LossPersists bool          // significant loss that propagates down the route
 	RTTPersists  bool          // RTT rise that does not recover on later hops
+
+	// ASN enrichment, filled in the background by asnCache. Empty for private
+	// IPs (LAN) and until the Team Cymru DNS lookup returns.
+	ASN    string // "AS13335", or "" if unknown / private / pending
+	ASName string // "CLOUDFLARENET - Cloudflare, Inc., US"
 }
 
 // TraceSnapshot is the full per-hop table as of the latest probing cycle.
@@ -48,11 +53,20 @@ type Tracer struct {
 	interval time.Duration
 	timeout  time.Duration // read window per cycle
 	dns      *dnsCache
+	asn      *asnCache
 }
 
 // NewTracer builds a Tracer for an already-resolved target.
 func NewTracer(ip net.IP, label string, maxHops int, interval, timeout time.Duration) *Tracer {
-	return &Tracer{target: label, ip: ip, maxHops: maxHops, interval: interval, timeout: timeout, dns: newDNSCache()}
+	return &Tracer{
+		target:   label,
+		ip:       ip,
+		maxHops:  maxHops,
+		interval: interval,
+		timeout:  timeout,
+		dns:      newDNSCache(),
+		asn:      newASNCache(),
+	}
 }
 
 type hopAcc struct {
@@ -128,6 +142,8 @@ func (tr *Tracer) Run(ctx context.Context, out chan<- TraceSnapshot) {
 			}
 			if a.ip != "" {
 				h.Host = tr.dns.lookup(a.ip)
+				info := tr.asn.lookup(a.ip)
+				h.ASN, h.ASName = info.num, info.name
 			}
 			hops = append(hops, h)
 		}
