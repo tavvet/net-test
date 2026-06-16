@@ -58,6 +58,13 @@ type Segment struct {
 // JSON export render.
 type Diagnosis struct {
 	Segments []Segment
+	// Healthy is false if ANY segment has a persistent anomaly. Computed once
+	// in BuildDiagnosis so the UI and JSON consumers don't each re-walk the
+	// segments to answer "is anything wrong?".
+	Healthy bool
+	// FirstIssue is the label of the first unhealthy segment (closest to the
+	// user), or "" when Healthy — lets a one-line verdict skip the re-walk.
+	FirstIssue string
 }
 
 // BuildDiagnosis groups hops into segments by ASN (or "local" for private IPs)
@@ -122,7 +129,15 @@ func BuildDiagnosis(hops []Hop) Diagnosis {
 		s.Healthy, s.Issue = segmentHealth(g.hops, hops)
 		segments = append(segments, s)
 	}
-	return Diagnosis{Segments: segments}
+
+	d := Diagnosis{Segments: segments, Healthy: true}
+	for _, s := range segments {
+		if !s.Healthy {
+			d.Healthy, d.FirstIssue = false, s.Label
+			break
+		}
+	}
+	return d
 }
 
 // hopZone returns the grouping key for a hop: "local" for private IPs, the

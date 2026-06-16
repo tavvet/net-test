@@ -131,6 +131,30 @@ func TestBuildDiagnosis_NoASNYet(t *testing.T) {
 	}
 }
 
+func TestBuildDiagnosis_HealthyField(t *testing.T) {
+	healthy := []Hop{
+		mkh(1, "10.0.0.1", "", "", 0),
+		mkh(2, "1.1.1.1", "AS13335", "CLOUDFLARENET", 0),
+	}
+	d := BuildDiagnosis(healthy)
+	if !d.Healthy || d.FirstIssue != "" {
+		t.Errorf("healthy route: Healthy=%v FirstIssue=%q, want true/empty", d.Healthy, d.FirstIssue)
+	}
+
+	bad := []Hop{
+		mkh(1, "10.0.0.1", "", "", 0),
+		{TTL: 2, IP: "5.180.172.2", ASN: "AS57043", ASName: "ITNET-AS", LossPct: 12, LossPersists: true},
+		{TTL: 3, IP: "1.1.1.1", ASN: "AS13335", ASName: "CLOUDFLARENET", LossPct: 12, LossPersists: true},
+	}
+	d = BuildDiagnosis(bad)
+	if d.Healthy {
+		t.Errorf("route with loss: Healthy=true, want false")
+	}
+	if d.FirstIssue != "Провайдер ITNET-AS" {
+		t.Errorf("FirstIssue=%q, want first unhealthy segment label", d.FirstIssue)
+	}
+}
+
 func TestBuildDiagnosis_OnlyLocal(t *testing.T) {
 	// Trace that never leaves the LAN — one segment.
 	hops := []Hop{
