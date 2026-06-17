@@ -110,7 +110,7 @@ var traceCols = []struct {
 }{
 	{"#", 3, true},
 	{"Хост / IP", 0, false}, // flex
-	{"Потери", 8, true},
+	{"Потери", 14, false},   // colored loss gauge + the percentage (left-aligned)
 	{"Отпр", 5, true},
 	{"Послед", 9, true},
 	{"Сред", 11, true}, // wider: also shows "+ΔX" suffix on flagged hops
@@ -126,6 +126,18 @@ func (m model) viewTrace() string {
 	t := m.trace
 	if t.Err != "" {
 		return lipgloss.NewStyle().Foreground(cBad).Render("Ошибка: " + t.Err)
+	}
+
+	banner, bannerColor := routeHeadline(t.Diagnosis)
+
+	// Scale the per-hop loss gauge to the worst hop on the route, floored at 10%
+	// so a near-clean route doesn't render alarming near-full bars. Computed over
+	// all hops so the scale stays stable as the view scrolls.
+	lossScale := 10.0
+	for _, h := range t.Hops {
+		if h.LossPct > lossScale {
+			lossScale = h.LossPct
+		}
 	}
 
 	fixed := 0
@@ -154,8 +166,8 @@ func (m model) viewTrace() string {
 	}
 	rows := []string{strings.Join(head, " ")}
 
-	// limit rows to available vertical space
-	maxRows := m.h - 8
+	// limit rows to available vertical space (header + tabs + banner + blanks + footer)
+	maxRows := m.h - 10
 	hops := t.Hops
 	if maxRows > 0 && len(hops) > maxRows {
 		hops = hops[len(hops)-maxRows:]
@@ -178,11 +190,13 @@ func (m model) viewTrace() string {
 
 		d := anomalyDecor(h)
 		dimStyle := lipgloss.NewStyle().Foreground(cDim)
+		lossGauge := bar(h.LossPct/lossScale, 6, lossColor(h.LossPct))
+		lossCell := lossGauge + " " + d.LossStyle.Render(fmt.Sprintf("%.0f%%", h.LossPct))
 		cells := []string{
 			gutter(d.Flag),
 			cell(fmt.Sprintf("%d", h.TTL), colW(0), true, dimStyle),
 			cell(host, colW(1), false, hc),
-			cell(fmt.Sprintf("%.0f%%", h.LossPct), colW(2), true, d.LossStyle),
+			cell(lossCell, colW(2), false, lipgloss.NewStyle()),
 			cell(fmt.Sprintf("%d", h.Sent), colW(3), true, dimStyle),
 			cell(rttCell(h.LastRTT), colW(4), true, lipgloss.NewStyle().Foreground(colorRTT(probe.Millis(h.LastRTT)))),
 			cell(d.AvgStr, colW(5), true, d.AvgStyle),
@@ -192,7 +206,16 @@ func (m model) viewTrace() string {
 		}
 		rows = append(rows, strings.Join(cells, " "))
 	}
-	return strings.Join(rows, "\n")
+
+	table := strings.Join(rows, "\n")
+	if banner == "" {
+		return table
+	}
+	return lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Bold(true).Foreground(bannerColor).Render(banner),
+		"",
+		table,
+	)
 }
 
 // networkLabel returns a short label for the network the hop belongs to: an
@@ -223,7 +246,7 @@ type rowDecor struct {
 // anomalyDecor builds the row decorations for one hop.
 func anomalyDecor(h probe.Hop) rowDecor {
 	d := rowDecor{
-		LossStyle: lipgloss.NewStyle().Foreground(colorLoss(h.LossPct)),
+		LossStyle: lipgloss.NewStyle().Foreground(lossColor(h.LossPct)),
 		AvgStr:    rttCell(h.AvgRTT),
 		AvgStyle:  lipgloss.NewStyle().Foreground(colorRTT(probe.Millis(h.AvgRTT))),
 	}

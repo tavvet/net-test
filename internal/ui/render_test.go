@@ -101,12 +101,14 @@ func TestViewPingCollectingWhenWindowTooSmall(t *testing.T) {
 
 func TestViewTraceContent(t *testing.T) {
 	m := sampleModel()
+	m.trace.Diagnosis = probe.BuildDiagnosis(m.trace.Hops)
 	m.tab = tabTrace
 	out := m.View()
 	// "⚠" + "+36": persistent anomaly with Δ suffix.
 	// "локальная сеть": private hop labelled.
 	// "CLOUDFLARENET": AS name shortened (full form has " - Cloudflare, …").
-	for _, want := range []string{"Хост", "10.0.1.1", "1.1.1.1", "⚠", "+36", "локальная сеть", "CLOUDFLARENET"} {
+	// "начинаются на хопе 4": the route headline points at the first persistent hop.
+	for _, want := range []string{"Хост", "10.0.1.1", "1.1.1.1", "⚠", "+36", "локальная сеть", "CLOUDFLARENET", "начинаются на хопе 4"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("trace view missing %q", want)
 		}
@@ -114,6 +116,51 @@ func TestViewTraceContent(t *testing.T) {
 	// The full Cymru form must NOT leak — shortenASName should trim it.
 	if strings.Contains(out, "Cloudflare, Inc.") {
 		t.Errorf("AS name not shortened — full Cymru form appears in output")
+	}
+}
+
+func TestRouteHeadline(t *testing.T) {
+	if got, _ := routeHeadline(probe.Diagnosis{}); got != "" {
+		t.Errorf("no route yet → %q, want empty (no banner)", got)
+	}
+	healthy := probe.Diagnosis{Healthy: true, Segments: []probe.Segment{{Healthy: true}}}
+	if got, _ := routeHeadline(healthy); !strings.Contains(got, "нет") {
+		t.Errorf("healthy → %q, want all-clear", got)
+	}
+	loss := probe.Diagnosis{
+		Segments:       []probe.Segment{{Healthy: false}},
+		FirstIssue:     "CLOUDFLARENET",
+		FirstIssueHop:  4,
+		FirstIssueLoss: true,
+	}
+	if got, _ := routeHeadline(loss); !strings.Contains(got, "Потери") || !strings.Contains(got, "хопе 4") || !strings.Contains(got, "CLOUDFLARENET") {
+		t.Errorf("loss headline = %q, want loss + hop 4 + zone", got)
+	}
+	lat := probe.Diagnosis{
+		Segments:      []probe.Segment{{Healthy: false}},
+		FirstIssue:    "ITNET-AS",
+		FirstIssueHop: 2,
+	}
+	if got, _ := routeHeadline(lat); !strings.Contains(got, "задержк") || !strings.Contains(got, "хопе 2") {
+		t.Errorf("latency headline = %q, want latency + hop 2", got)
+	}
+}
+
+// TestLossColor locks the route gauge to the SHARED probe.Quality classifier
+// (4 levels, 0% neutral) so the TUI and the mobile GUI can't drift apart on how
+// they bucket per-hop loss.
+func TestLossColor(t *testing.T) {
+	if lossColor(0) != cMuted {
+		t.Errorf("0%% loss = %v, want neutral grey (cMuted)", lossColor(0))
+	}
+	if lossColor(0.5) != cOK {
+		t.Errorf("0–1%% loss = %v, want QualityGood (cOK)", lossColor(0.5))
+	}
+	if lossColor(3) != cWarn {
+		t.Errorf("1–5%% loss = %v, want QualityBad (cWarn)", lossColor(3))
+	}
+	if lossColor(10) != cBad {
+		t.Errorf(">5%% loss = %v, want QualityCritical (cBad)", lossColor(10))
 	}
 }
 

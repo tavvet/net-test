@@ -65,6 +65,13 @@ type Diagnosis struct {
 	// FirstIssue is the label of the first unhealthy segment (closest to the
 	// user), or "" when Healthy — lets a one-line verdict skip the re-walk.
 	FirstIssue string
+	// FirstIssueHop is the TTL of the hop where the first problem begins (0 when
+	// Healthy). The route view uses it to point straight at the culprit node
+	// without re-parsing the issue string.
+	FirstIssueHop int
+	// FirstIssueLoss reports whether that first problem is packet loss (true) or
+	// a latency jump (false), so each front-end can word the headline correctly.
+	FirstIssueLoss bool
 }
 
 // BuildDiagnosis groups hops into segments by ASN (or "local" for private IPs)
@@ -107,6 +114,7 @@ func BuildDiagnosis(hops []Hop) Diagnosis {
 		}
 	}
 
+	d := Diagnosis{Healthy: true}
 	for i, g := range groups {
 		s := Segment{
 			HopFrom:  hops[g.hops[0]].TTL,
@@ -126,17 +134,23 @@ func BuildDiagnosis(hops []Hop) Diagnosis {
 			s.Kind = SegmentTransit
 		}
 		s.Label = segmentLabel(s.Kind, g.hops, hops)
-		s.Healthy, s.Issue = segmentHealth(g.hops, hops)
-		segments = append(segments, s)
-	}
 
-	d := Diagnosis{Segments: segments, Healthy: true}
-	for _, s := range segments {
-		if !s.Healthy {
-			d.Healthy, d.FirstIssue = false, s.Label
-			break
+		var issueHop int
+		var issueLoss bool
+		s.Healthy, s.Issue, issueHop, issueLoss = segmentHealth(g.hops, hops)
+		segments = append(segments, s)
+
+		// The first unhealthy segment (closest to the user) drives the
+		// route-level verdict and points the route view straight at the culprit
+		// hop. Once Healthy flips false we keep that earliest culprit.
+		if !s.Healthy && d.Healthy {
+			d.Healthy = false
+			d.FirstIssue = s.Label
+			d.FirstIssueHop = issueHop
+			d.FirstIssueLoss = issueLoss
 		}
 	}
+	d.Segments = segments
 	return d
 }
 
@@ -188,18 +202,20 @@ func segmentLabel(kind SegmentKind, hopIdx []int, hops []Hop) string {
 
 // segmentHealth scans the hops in a segment for persistent-anomaly flags. The
 // first hop with a problem wins — that's where the problem started, which is
-// the most useful information for the user.
-func segmentHealth(hopIdx []int, hops []Hop) (healthy bool, issue string) {
+// the most useful information for the user. It also returns the TTL of that
+// culprit hop and whether the problem is packet loss (vs a latency jump), so
+// the route view can point at the exact node without re-parsing the issue text.
+func segmentHealth(hopIdx []int, hops []Hop) (healthy bool, issue string, hopTTL int, isLoss bool) {
 	for _, i := range hopIdx {
 		h := hops[i]
 		if h.LossPersists {
-			return false, fmt.Sprintf("потери %.0f%% начиная с хопа %d", h.LossPct, h.TTL)
+			return false, fmt.Sprintf("потери %.0f%% начиная с хопа %d", h.LossPct, h.TTL), h.TTL, true
 		}
 		if h.RTTPersists && h.DeltaRTT > 0 {
-			return false, fmt.Sprintf("скачок задержки +%.0f ms на хопе %d", Millis(h.DeltaRTT), h.TTL)
+			return false, fmt.Sprintf("скачок задержки +%.0f ms на хопе %d", Millis(h.DeltaRTT), h.TTL), h.TTL, false
 		}
 	}
-	return true, ""
+	return true, "", 0, false
 }
 
 func firstASN(hopIdx []int, hops []Hop) (asn, name string) {

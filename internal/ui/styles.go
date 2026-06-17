@@ -63,6 +63,19 @@ func colorLoss(pct float64) lipgloss.Color {
 	}
 }
 
+// lossColor maps a hop's packet-loss percentage to a route-gauge colour via the
+// SHARED probe.Quality classifier (loss only, jitter 0), so the TUI route gauge
+// and the mobile GUI bucket per-hop loss identically (4 levels). 0% is neutral
+// grey — no alarm on a clean hop.
+func lossColor(pct float64) lipgloss.Color {
+	level, _ := probe.Quality(pct, 0)
+	if level == probe.QualityPerfect {
+		return cMuted
+	}
+	_, c := labelColor(level)
+	return c
+}
+
 // sparkline renders the last `width` RTT samples as colored block characters.
 // A zero sample (lost probe) renders as a red ✕.
 func sparkline(vals []float64, width int) string {
@@ -133,6 +146,23 @@ func labelColor(q probe.QualityLevel) (string, lipgloss.Color) {
 		return "Хорошо", cOK
 	default:
 		return "Отлично", cGood
+	}
+}
+
+// routeHeadline summarises the route diagnosis into one line for the top of the
+// Маршрут tab — where loss (or a latency jump) first appears, or an all-clear.
+// It reads probe's pre-computed FirstIssueHop/FirstIssueLoss so the wording and
+// the culprit hop match the mobile GUI exactly; "" means there's no route yet.
+func routeHeadline(d probe.Diagnosis) (string, lipgloss.Color) {
+	switch {
+	case len(d.Segments) == 0:
+		return "", cDim
+	case d.Healthy:
+		return "✓ Потерь по маршруту нет", cGood
+	case d.FirstIssueLoss:
+		return fmt.Sprintf("⚠ Потери начинаются на хопе %d · %s", d.FirstIssueHop, d.FirstIssue), cBad
+	default:
+		return fmt.Sprintf("↑ Рост задержки на хопе %d · %s", d.FirstIssueHop, d.FirstIssue), cWarn
 	}
 }
 
