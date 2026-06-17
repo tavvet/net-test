@@ -30,8 +30,7 @@ func TestRenderTabs(t *testing.T) {
 	test.NewTempApp(t)
 	v := newView()
 	v.ping.SetText(pingText(samplePing()))
-	v.hops = sampleHops()
-	v.hopList.Refresh()
+	v.setRoute(sampleTrace())
 	v.diag.SetText(diagText(sampleTrace()))
 	v.speed.SetText(speedText(sampleSpeed()))
 
@@ -75,25 +74,20 @@ func sampleHops() []probe.Hop {
 	ms := func(f float64) time.Duration { return time.Duration(f * float64(time.Millisecond)) }
 	return []probe.Hop{
 		{TTL: 1, IP: "10.0.1.1", Host: "router.lan", Sent: 42, Recv: 42, AvgRTT: ms(1.4)},
-		{TTL: 2, IP: "5.180.172.2", Sent: 42, Recv: 42, AvgRTT: ms(11.8), ASName: "ITNET-AS, IT"},
-		{TTL: 3, IP: "212.237.216.242", Sent: 42, Recv: 34, LossPct: 18, AvgRTT: ms(42.1), ASName: "ITNET-AS, IT"},
-		{TTL: 4, IP: "162.158.236.14", Sent: 42, Recv: 34, LossPct: 18, AvgRTT: ms(42.1), ASName: "CLOUDFLARENET - Cloudflare, Inc., US", LossPersists: true},
-		{TTL: 5, IP: "1.1.1.1", Host: "one.one.one.one", Sent: 42, Recv: 34, LossPct: 18, AvgRTT: ms(44.0), ASName: "CLOUDFLARENET - Cloudflare, Inc., US", LossPersists: true},
+		{TTL: 2, IP: "5.180.172.2", ASN: "AS57043", ASName: "ITNET-AS, IT", Sent: 42, Recv: 42, AvgRTT: ms(11.8)},
+		{TTL: 3, IP: "212.237.216.242", ASN: "AS57043", ASName: "ITNET-AS, IT", Sent: 42, Recv: 42, AvgRTT: ms(13.1)},
+		{TTL: 4, IP: "162.158.236.14", ASN: "AS13335", ASName: "CLOUDFLARENET - Cloudflare, Inc., US", Sent: 42, Recv: 34, LossPct: 18, AvgRTT: ms(42.1), LossPersists: true},
+		{TTL: 5, IP: "1.1.1.1", Host: "one.one.one.one", ASN: "AS13335", ASName: "CLOUDFLARENET - Cloudflare, Inc., US", Sent: 42, Recv: 34, LossPct: 18, AvgRTT: ms(44.0), LossPersists: true},
 	}
 }
 
+// sampleTrace runs the real BuildDiagnosis over the sample hops so the headline
+// (FirstIssueHop/FirstIssueLoss) and segments match what the app would compute.
 func sampleTrace() probe.TraceSnapshot {
+	hops := sampleHops()
 	return probe.TraceSnapshot{
-		Target: "1.1.1.1", IP: "1.1.1.1", Hops: sampleHops(),
-		Diagnosis: probe.Diagnosis{
-			Healthy:    false,
-			FirstIssue: "CLOUDFLARENET",
-			Segments: []probe.Segment{
-				{Label: "Локальная сеть", Kind: probe.SegmentLocal, HopFrom: 1, HopTo: 1, HopCount: 1, Healthy: true},
-				{Label: "Провайдер ITNET-AS", Kind: probe.SegmentProvider, HopFrom: 2, HopTo: 3, HopCount: 2, Healthy: true},
-				{Label: "CLOUDFLARENET", Kind: probe.SegmentDestination, HopFrom: 4, HopTo: 5, HopCount: 2, Healthy: false, Issue: "потери 18% начиная с хопа 4"},
-			},
-		},
+		Target: "1.1.1.1", IP: "1.1.1.1", Hops: hops,
+		Diagnosis: probe.BuildDiagnosis(hops),
 	}
 }
 

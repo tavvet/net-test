@@ -15,13 +15,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"net"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/tavvet/net-test/internal/probe"
@@ -31,17 +34,17 @@ import (
 // Separating construction (newView) from behaviour (wire) lets the headless
 // renderer in render_test.go build the exact same UI tree without a display.
 type view struct {
-	root     fyne.CanvasObject
-	target   *widget.Entry
-	status   *widget.Label
-	tabs     *container.AppTabs
-	startBtn *widget.Button
-	speedBtn *widget.Button
-	ping     *widget.Label
-	diag     *widget.Label
-	speed    *widget.Label
-	hopList  *widget.List
-	hops     []probe.Hop // backing data for hopList
+	root        fyne.CanvasObject
+	target      *widget.Entry
+	status      *widget.Label
+	tabs        *container.AppTabs
+	startBtn    *widget.Button
+	speedBtn    *widget.Button
+	ping        *widget.Label
+	diag        *widget.Label
+	speed       *widget.Label
+	routeBanner *canvas.Text    // headline above the route: where loss starts
+	hopBox      *fyne.Container // VBox of per-hop rows, rebuilt on each snapshot
 }
 
 func newView() *view {
@@ -53,20 +56,19 @@ func newView() *view {
 	v.diag = monoLabel("—")
 	v.speed = monoLabel("Нажмите «Запустить тест скорости».")
 
-	v.hopList = widget.NewList(
-		func() int { return len(v.hops) },
-		func() fyne.CanvasObject { return monoLabel("") },
-		func(i widget.ListItemID, o fyne.CanvasObject) {
-			o.(*widget.Label).SetText(hopLine(v.hops[i]))
-		},
-	)
+	v.routeBanner = canvas.NewText("Нажмите «Старт».", colDim)
+	v.routeBanner.TextStyle = fyne.TextStyle{Bold: true}
+	v.hopBox = container.NewVBox()
 
 	v.speedBtn = widget.NewButton("Запустить тест скорости", nil)
 	v.startBtn = widget.NewButton("Старт", nil)
 
 	v.tabs = container.NewAppTabs(
 		container.NewTabItem("Пинг", container.NewVScroll(v.ping)),
-		container.NewTabItem("Маршрут", v.hopList),
+		container.NewTabItem("Маршрут", container.NewBorder(
+			container.NewPadded(v.routeBanner), nil, nil, nil,
+			container.NewVScroll(v.hopBox),
+		)),
 		container.NewTabItem("Диагноз", container.NewVScroll(v.diag)),
 		container.NewTabItem("Скорость", container.NewBorder(v.speedBtn, nil, nil, nil, container.NewVScroll(v.speed))),
 	)
@@ -171,8 +173,7 @@ func wire(appCtx context.Context, v *view) {
 						if gen != epoch {
 							return
 						}
-						v.hops = s.Hops
-						v.hopList.Refresh()
+						v.setRoute(s)
 						v.diag.SetText(diagText(s))
 					})
 				}
@@ -258,30 +259,187 @@ func qualityLabel(q probe.QualityLevel) string {
 	}
 }
 
-func hopLine(h probe.Hop) string {
-	flag := "  "
-	if h.LossPersists || h.RTTPersists {
-		flag = "⚠ "
+// ---- route (loss map) ----
+
+// Severity palette for the loss gauge — fixed colours (not theme-derived) so the
+// four quality levels stay visually distinct; tuned to read on the default dark
+// theme. Neutral text uses the theme's foreground/disabled colours instead.
+var (
+	colDim  = color.NRGBA{0x8a, 0x8a, 0x8a, 0xff}
+	colGood = color.NRGBA{0x3d, 0xc0, 0x6c, 0xff}
+	colOK   = color.NRGBA{0xd9, 0x9e, 0x1f, 0xff}
+	colWarn = color.NRGBA{0xe2, 0x7d, 0x2f, 0xff}
+	colBad  = color.NRGBA{0xdb, 0x4b, 0x4b, 0xff}
+)
+
+// qualityColor maps a probe quality level to its gauge colour. probe.Quality is
+// the shared source of the thresholds; this just mirrors the TUI's palette intent.
+func qualityColor(q probe.QualityLevel) color.NRGBA {
+	switch q {
+	case probe.QualityCritical:
+		return colBad
+	case probe.QualityBad:
+		return colWarn
+	case probe.QualityGood:
+		return colOK
+	default:
+		return colGood
 	}
-	name := h.Host
-	if name == "" {
-		if name = h.IP; name == "" {
-			name = "*"
+}
+
+// routeHeadline mirrors the TUI banner: where loss (or a latency jump) first
+// appears on the route, or an all-clear. The wording and the culprit hop come
+// from probe (FirstIssueHop/FirstIssueLoss) so the two front-ends never disagree.
+func routeHeadline(d probe.Diagnosis) (string, color.NRGBA) {
+	switch {
+	case len(d.Segments) == 0:
+		return "Сбор маршрута…", colDim
+	case d.Healthy:
+		return "✓ Потерь по маршруту нет", colGood
+	case d.FirstIssueLoss:
+		return fmt.Sprintf("⚠ Потери начинаются на хопе %d · %s", d.FirstIssueHop, d.FirstIssue), colBad
+	default:
+		return fmt.Sprintf("↑ Рост задержки на хопе %d · %s", d.FirstIssueHop, d.FirstIssue), colWarn
+	}
+}
+
+// setRoute repaints the Маршрут tab from a trace snapshot: the headline banner
+// plus one rich row per hop. Hops are few (≤ max-hops), so rebuilding the rows
+// each snapshot is cheaper and simpler than diffing a recycling list.
+func (v *view) setRoute(s probe.TraceSnapshot) {
+	if s.Err != "" {
+		v.routeBanner.Text, v.routeBanner.Color = "Ошибка: "+s.Err, colBad
+		v.routeBanner.Refresh()
+		v.hopBox.Objects = nil
+		v.hopBox.Refresh()
+		return
+	}
+
+	text, col := routeHeadline(s.Diagnosis)
+	v.routeBanner.Text, v.routeBanner.Color = text, col
+	v.routeBanner.Refresh()
+
+	// Scale the gauge to the worst hop on the route, floored at 10% so a
+	// near-clean route doesn't render alarming near-full bars.
+	lossScale := 10.0
+	for _, h := range s.Hops {
+		if h.LossPct > lossScale {
+			lossScale = h.LossPct
 		}
 	}
-	rtt := "   —  "
-	if h.Recv > 0 {
-		rtt = fmt.Sprintf("%5.0fms", probe.Millis(h.AvgRTT))
+	rows := make([]fyne.CanvasObject, len(s.Hops))
+	for i, h := range s.Hops {
+		rows[i] = newHopRow(h, lossScale)
 	}
-	// Zone label mirrors the TUI's networkLabel: local IP → "локальная сеть",
-	// else the shortened AS name, else nothing.
-	zone := ""
+	v.hopBox.Objects = rows
+	v.hopBox.Refresh()
+}
+
+// newHopRow builds one route row: a flag+TTL gutter, host over zone, the loss
+// gauge underneath, and loss%/RTT on the right. Persistent-anomaly hops get the
+// ⚠ marker and a severity-coloured zone so the problem node stands out.
+func newHopRow(h probe.Hop, lossScale float64) fyne.CanvasObject {
+	fg := theme.Color(theme.ColorNameForeground)
+	dim := theme.Color(theme.ColorNameDisabled)
+
+	level, _ := probe.Quality(h.LossPct, 0)
+	sev := qualityColor(level)
+	if level == probe.QualityPerfect {
+		sev = colDim // 0% loss → neutral, no alarm
+	}
+	flagged := h.LossPersists || h.RTTPersists
+
+	ttlStr, ttlColor := fmt.Sprintf("  %2d", h.TTL), dim
+	if flagged {
+		ttlStr, ttlColor = fmt.Sprintf("⚠ %2d", h.TTL), color.Color(colBad)
+	}
+	zoneColor := dim
+	if flagged {
+		zoneColor = sev
+	}
+	lossColor := dim
+	if h.LossPct > 0 {
+		lossColor = sev
+	}
+
+	loss := monoText(fmt.Sprintf("%.0f%%", h.LossPct), lossColor)
+	loss.Alignment = fyne.TextAlignTrailing
+	rtt := monoText(hopRTT(h), dim)
+	rtt.Alignment = fyne.TextAlignTrailing
+
+	top := container.NewBorder(
+		nil, nil,
+		monoText(ttlStr, ttlColor),
+		container.NewVBox(loss, rtt),
+		container.NewVBox(monoText(truncRunes(hopName(h), 30), fg), monoText(truncRunes(hopZoneLabel(h), 30), zoneColor)),
+	)
+	return container.NewVBox(top, monoText(lossBar(h.LossPct, lossScale), sev))
+}
+
+// truncRunes caps a string to max runes (canvas.Text doesn't wrap), so a long
+// reverse-DNS name can't overflow into the loss column on a narrow screen.
+func truncRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max <= 1 {
+		return "…"
+	}
+	return string(r[:max-1]) + "…"
+}
+
+// lossBar renders packet loss as a 14-cell gauge: filled blocks proportional to
+// loss (scaled to the worst hop on the route), the rest a faint track.
+func lossBar(lossPct, scale float64) string {
+	const width = 14
+	n := 0
+	if scale > 0 {
+		n = int(lossPct/scale*float64(width) + 0.5)
+	}
+	if n > width {
+		n = width
+	}
+	if n < 0 {
+		n = 0
+	}
+	return strings.Repeat("█", n) + strings.Repeat("░", width-n)
+}
+
+func hopName(h probe.Hop) string {
+	switch {
+	case h.Host != "":
+		return h.Host
+	case h.IP != "":
+		return h.IP
+	default:
+		return "*"
+	}
+}
+
+// hopZoneLabel mirrors the TUI's networkLabel: local IP → "локальная сеть", else
+// the shortened AS name, else "" while the lookup is still in flight.
+func hopZoneLabel(h probe.Hop) string {
 	if ip := net.ParseIP(h.IP); ip != nil && probe.IsLocalIP(ip) {
-		zone = " локальная сеть"
-	} else if h.ASName != "" {
-		zone = " " + probe.ShortenASName(h.ASName)
+		return "локальная сеть"
 	}
-	return fmt.Sprintf("%s%2d %3.0f%% %s  %s%s", flag, h.TTL, h.LossPct, rtt, name, zone)
+	if h.ASName != "" {
+		return probe.ShortenASName(h.ASName)
+	}
+	return ""
+}
+
+func hopRTT(h probe.Hop) string {
+	if h.Recv == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.0f ms", probe.Millis(h.AvgRTT))
+}
+
+func monoText(s string, c color.Color) *canvas.Text {
+	t := canvas.NewText(s, c)
+	t.TextStyle = fyne.TextStyle{Monospace: true}
+	return t
 }
 
 func diagText(s probe.TraceSnapshot) string {

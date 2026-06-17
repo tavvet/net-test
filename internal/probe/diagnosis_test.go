@@ -112,6 +112,10 @@ func TestBuildDiagnosis_RTTPersistPointsAtTransit(t *testing.T) {
 	if d.Segments[2].Healthy != false || !strings.Contains(d.Segments[2].Issue, "+40") {
 		t.Errorf("destination segment should report RTT spike, got %+v", d.Segments[2])
 	}
+	if d.FirstIssue != "CLOUDFLARENET" || d.FirstIssueHop != 3 || d.FirstIssueLoss {
+		t.Errorf("RTT culprit: FirstIssue=%q FirstIssueHop=%d FirstIssueLoss=%v, want CLOUDFLARENET/3/false",
+			d.FirstIssue, d.FirstIssueHop, d.FirstIssueLoss)
+	}
 }
 
 func TestBuildDiagnosis_NoASNYet(t *testing.T) {
@@ -137,8 +141,9 @@ func TestBuildDiagnosis_HealthyField(t *testing.T) {
 		mkh(2, "1.1.1.1", "AS13335", "CLOUDFLARENET", 0),
 	}
 	d := BuildDiagnosis(healthy)
-	if !d.Healthy || d.FirstIssue != "" {
-		t.Errorf("healthy route: Healthy=%v FirstIssue=%q, want true/empty", d.Healthy, d.FirstIssue)
+	if !d.Healthy || d.FirstIssue != "" || d.FirstIssueHop != 0 || d.FirstIssueLoss {
+		t.Errorf("healthy route: Healthy=%v FirstIssue=%q FirstIssueHop=%d FirstIssueLoss=%v, want true/\"\"/0/false",
+			d.Healthy, d.FirstIssue, d.FirstIssueHop, d.FirstIssueLoss)
 	}
 
 	bad := []Hop{
@@ -152,6 +157,9 @@ func TestBuildDiagnosis_HealthyField(t *testing.T) {
 	}
 	if d.FirstIssue != "Провайдер ITNET-AS" {
 		t.Errorf("FirstIssue=%q, want first unhealthy segment label", d.FirstIssue)
+	}
+	if d.FirstIssueHop != 2 || !d.FirstIssueLoss {
+		t.Errorf("loss culprit: FirstIssueHop=%d FirstIssueLoss=%v, want 2/true", d.FirstIssueHop, d.FirstIssueLoss)
 	}
 }
 
